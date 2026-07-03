@@ -1,0 +1,66 @@
+# 依赖文件
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# 构建输出
+dist/
+build/
+.vercel/
+
+# 数据库与运行时数据（首次 seed 后生成，勿提交）
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/qlib_data/
+data/cache/
+# data 目录下的运行产物（日志/快照/评估结果/进度），由程序运行生成
+data/*.log
+data/*.pkl
+data/*.json
+data/*.txt
+data/download_progress.json
+data/factor_evaluation*.json
+
+# 归档目录
+archive/
+
+# 环境变量文件（包含敏感信息）
+.env
+.env.local
+.env.production
+.env.development
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.log
+.cache/
+
+# Claude Code
+.claude/
+
+# Playwright MCP 运行产物
+.playwright-mcp/
+
+# 运行日志目录
+logs/
+
+# 临时审计产物
+audit_results.json
+audit_results.md
+audit_script.mjs
+
+# Windows 保留文件名
+nul

@@ -1,0 +1,17 @@
+# AlphaCouncil2-AI Python 依赖
+# 安装: pip install -r requirements.txt
+#
+# 本项目默认使用 SQLite 存储 (零外部依赖)，无需 Redis。
+# 如需启用 Redis，设环境变量 QUANT_CACHE=redis 并安装下方可选的 redis 包。
+
+# ─── 核心依赖 (必需) ──────────────────────────
+pandas>=2.0.0          # DataFrame，因子/策略/回测核心
+numpy>=1.24.0          # 数值计算
+scipy>=1.10.0          # IC 评估 (spearmanr)、优化器
+
+# ─── 数据源 ──────────────────────────────────
+akshare>=1.14.0        # A 股财务/特色数据 (免费免key)
+
+# ─── 可选依赖 ────────────────────────────────
+# redis>=5.0.0          # 仅当 QUANT_CACHE=redis 时需要 (默认 SQLite 无需)
+# tushare>=1.4.0        # 仅当使用 Tushare 数据源时需要 (本项目默认用腾讯+akshare)

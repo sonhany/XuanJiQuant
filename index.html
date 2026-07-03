@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f172a'/><text x='16' y='22' text-anchor='middle' font-family='Inter,sans-serif' font-size='18' font-weight='700' fill='%233b82f6'>A</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AlphaCouncil AI - 基于多智能体的专业级A股市场分析系统" />
+    <title>AlphaCouncil AI - 多智能体股票分析决策系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* 使用系统字体栈，避免浏览器验证依赖外部字体网络。 */
+      body {
+        font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
+        background-color: #0f172a;
+        color: #e2e8f0;
+      }
+      .font-mono {
+        font-family: Consolas, 'Courier New', monospace;
+      }
+      /* Custom scrollbar for agent cards */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1e293b;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #475569;
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
+      
+      /* Modern Custom Range Slider */
+      .custom-range {
+        -webkit-appearance: none;
+        width: 100%;
+        height: 6px;
+        background: #1e293b;
+        border-radius: 9999px;
+        outline: none;
+        border: 1px solid #334155;
+        cursor: pointer;
+      }
+      /* Thumb - Webkit */
+      .custom-range::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #3b82f6; /* Blue-500 */
+        margin-top: -6px; /* Center thumb on track */
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        border: 2px solid #0f172a;
+      }
+      .custom-range::-webkit-slider-thumb:hover {
+        background: #60a5fa;
+        transform: scale(1.1);
+        box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.3);
+      }
+      /* Track - Webkit */
+      .custom-range::-webkit-slider-runnable-track {
+        width: 100%;
+        height: 4px;
+        cursor: pointer;
+        background: #334155;
+        border-radius: 9999px;
+      }
+      
+      /* Firefox Styles */
+      .custom-range::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #3b82f6;
+        border: 2px solid #0f172a;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .custom-range::-moz-range-thumb:hover {
+        background: #60a5fa;
+        transform: scale(1.1);
+        box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.3);
+      }
+      .custom-range::-moz-range-track {
+        width: 100%;
+        height: 4px;
+        cursor: pointer;
+        background: #334155;
+        border-radius: 9999px;
+      }
+
+      /* 淡入动画 */
+      @keyframes fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes fade-in-up {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .animate-fade-in {
+        animation: fade-in 0.3s ease-out;
+      }
+      .animate-fade-in-up {
+        animation: fade-in-up 0.4s ease-out;
+      }
+
+      /* 侧边栏滑入动画 */
+      @keyframes slide-in-right {
+        from { transform: translateX(100%); }
+        to { transform: translateX(0); }
+      }
+      .animate-slide-in-right {
+        animation: slide-in-right 0.3s ease-out;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
