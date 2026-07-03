@@ -64,3 +64,5 @@ audit_script.mjs
 
 # Windows 保留文件名
 nul
+*.png
+playwright_shot.png
