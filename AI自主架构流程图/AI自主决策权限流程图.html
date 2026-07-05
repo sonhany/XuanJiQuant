@@ -1,0 +1,141 @@
+<svg viewBox="0 0 680 820" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#A32D2D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<text x="340" y="28" text-anchor="middle" font-size="15" font-weight="500" fill="var(--color-text-primary, #2C2C2A)">AI自主决策权限流程 — 从数据到交易的完整路径</text>
+
+<!-- Data Input -->
+<rect x="240" y="48" width="200" height="40" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="340" y="65" text-anchor="middle" font-size="12" fill="#0C447C">市场数据输入</text>
+<text x="340" y="80" text-anchor="middle" font-size="10" fill="#5F5E5A">行情 / 新闻 / 社媒 / 宏观</text>
+
+<!-- Arrow -->
+<path d="M340 88 L340 108" stroke="#5F5E5A" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 1: Data Quality -->
+<rect x="180" y="108" width="320" height="52" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="200" y="128" font-size="11" fill="#534AB7" font-weight="500">决策点1：数据质量与选择（AI自主）</text>
+<rect x="196" y="136" width="140" height="20" rx="4" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+<text x="266" y="150" text-anchor="middle" font-size="10" fill="#3C3489">LLM评估数据源可靠性</text>
+<rect x="344" y="136" width="140" height="20" rx="4" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+<text x="414" y="150" text-anchor="middle" font-size="10" fill="#3C3489">自动补充缺失数据</text>
+<text x="200" y="162" font-size="9" fill="#7F77DD">自主权限：拒收低质量数据 / 切换数据源 / 触发补采</text>
+
+<path d="M340 160 L340 180" stroke="#534AB7" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 2: Regime Classification -->
+<rect x="180" y="180" width="320" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="200" y="200" font-size="11" fill="#0F6E56" font-weight="500">决策点2：市场状态识别（AI自主）</text>
+<rect x="196" y="208" width="88" height="20" rx="4" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="240" y="222" text-anchor="middle" font-size="10" fill="#085041">牛/熊/震荡</text>
+<rect x="292" y="208" width="88" height="20" rx="4" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="336" y="222" text-anchor="middle" font-size="10" fill="#085041">高/低波动</text>
+<rect x="388" y="208" width="88" height="20" rx="4" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="432" y="222" text-anchor="middle" font-size="10" fill="#085041">政策敏感期</text>
+<text x="200" y="244" font-size="9" fill="#1D9E75">自主权限：选择应对策略 / 调整因子权重 / 切换策略空间</text>
+
+<path d="M340 244 L340 264" stroke="#0F6E56" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 3: Factor Selection -->
+<rect x="180" y="264" width="320" height="64" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+<text x="200" y="284" font-size="11" fill="#854F0B" font-weight="500">决策点3：因子发现与选择（AI自主）</text>
+<rect x="196" y="292" width="88" height="20" rx="4" fill="#FAC775" stroke="#BA7517" stroke-width="0.5"/>
+<text x="240" y="306" text-anchor="middle" font-size="10" fill="#633806">LLM发明新因子</text>
+<rect x="292" y="292" width="88" height="20" rx="4" fill="#FAC775" stroke="#BA7517" stroke-width="0.5"/>
+<text x="336" y="306" text-anchor="middle" font-size="10" fill="#633806">进化算法优化</text>
+<rect x="388" y="292" width="88" height="20" rx="4" fill="#FAC775" stroke="#BA7517" stroke-width="0.5"/>
+<text x="432" y="306" text-anchor="middle" font-size="10" fill="#633806">衰减自动淘汰</text>
+<text x="200" y="324" font-size="9" fill="#BA7517">自主权限：创造新因子 / 淘汰旧因子 / 调整因子组合</text>
+
+<path d="M340 328 L340 348" stroke="#BA7517" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 4: Strategy Generation -->
+<rect x="180" y="348" width="320" height="76" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text x="200" y="368" font-size="11" fill="#72243E" font-weight="500">决策点4：策略生成与选择（AI自主）</text>
+<rect x="196" y="376" width="88" height="20" rx="4" fill="#F5C4B3" stroke="#993C1D" stroke-width="0.5"/>
+<text x="240" y="390" text-anchor="middle" font-size="10" fill="#712B13">LLM写策略配置/DSL</text>
+<rect x="292" y="376" width="88" height="20" rx="4" fill="#F5C4B3" stroke="#993C1D" stroke-width="0.5"/>
+<text x="336" y="390" text-anchor="middle" font-size="10" fill="#712B13">回测验证</text>
+<rect x="388" y="376" width="88" height="20" rx="4" fill="#F5C4B3" stroke="#993C1D" stroke-width="0.5"/>
+<text x="432" y="390" text-anchor="middle" font-size="10" fill="#712B13">多策略集成</text>
+<text x="200" y="404" font-size="9" fill="#993C1D">自主权限：创造策略 / 选择策略组合 / 设置策略参数</text>
+<text x="200" y="416" font-size="9" fill="#993C1D">特殊：A股涨停板策略 / T+1适配策略 / ST股策略</text>
+
+<path d="M340 424 L340 444" stroke="#993C1D" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 5: Portfolio Construction -->
+<rect x="180" y="444" width="320" height="64" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="200" y="464" font-size="11" fill="#3B6D11" font-weight="500">决策点5：组合构建（AI自主）</text>
+<rect x="196" y="472" width="88" height="20" rx="4" fill="#C0DD97" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="240" y="486" text-anchor="middle" font-size="10" fill="#27500A">AI组合优化</text>
+<rect x="292" y="472" width="88" height="20" rx="4" fill="#C0DD97" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="336" y="486" text-anchor="middle" font-size="10" fill="#27500A">行业暴露控制</text>
+<rect x="388" y="472" width="88" height="20" rx="4" fill="#C0DD97" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="432" y="486" text-anchor="middle" font-size="10" fill="#27500A">T+1约束满足</text>
+<text x="200" y="504" font-size="9" fill="#639922">自主权限：决定个股权重 / 行业配置 / 现金比例</text>
+
+<path d="M340 508 L340 528" stroke="#3B6D11" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Decision Point 6: Execution -->
+<rect x="180" y="528" width="320" height="52" rx="8" fill="#E6F1FB" stroke="#0C447C" stroke-width="0.5"/>
+<text x="200" y="548" font-size="11" fill="#0C447C" font-weight="500">决策点6：执行时机与方式（AI自主）</text>
+<rect x="196" y="556" width="88" height="20" rx="4" fill="#B5D4F4" stroke="#0C447C" stroke-width="0.5"/>
+<text x="240" y="570" text-anchor="middle" font-size="10" fill="#042C53">时机选择</text>
+<rect x="292" y="556" width="88" height="20" rx="4" fill="#B5D4F4" stroke="#0C447C" stroke-width="0.5"/>
+<text x="336" y="570" text-anchor="middle" font-size="10" fill="#042C53">订单拆分</text>
+<rect x="388" y="556" width="88" height="20" rx="4" fill="#B5D4F4" stroke="#0C447C" stroke-width="0.5"/>
+<text x="432" y="570" text-anchor="middle" font-size="10" fill="#042C53">冲击成本控制</text>
+<text x="200" y="580" font-size="9" fill="#185FA5">自主权限：决定何时下单 / 如何拆分 / 是否延迟执行</text>
+
+<path d="M340 580 L340 600" stroke="#0C447C" stroke-width="1" marker-end="url(#arrow)" fill="none"/>
+
+<!-- Hard Risk Gate -->
+<rect x="220" y="600" width="240" height="48" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1"/>
+<text x="240" y="620" font-size="11" fill="#791F1F" font-weight="500">硬风控闸门（不可AI绕过）</text>
+<rect x="236" y="628" width="72" height="20" rx="4" fill="#F7C1C1" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="272" y="642" text-anchor="middle" font-size="10" fill="#501313">单股≤配置上限</text>
+<rect x="316" y="628" width="72" height="20" rx="4" fill="#F7C1C1" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="352" y="642" text-anchor="middle" font-size="10" fill="#501313">总仓位≤95%</text>
+<rect x="396" y="628" width="72" height="20" rx="4" fill="#F7C1C1" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="432" y="642" text-anchor="middle" font-size="10" fill="#501313">涨跌停不买</text>
+
+<path d="M340 648 L340 668" stroke="#A32D2D" stroke-width="1.5" marker-end="url(#arrow-red)" fill="none"/>
+
+<!-- Order Execution -->
+<rect x="240" y="668" width="200" height="40" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="340" y="685" text-anchor="middle" font-size="12" fill="#0F6E56">订单执行</text>
+<text x="340" y="700" text-anchor="middle" font-size="10" fill="#5F5E5A">API下单 / 模拟盘 / 实盘（隔离）</text>
+
+<!-- Feedback loop -->
+<path d="M340 708 Q460 708 500 600 Q540 480 480 320 Q420 160 340 108" stroke="#993C1D" stroke-width="1" fill="none" stroke-dasharray="4,3"/>
+<path d="M340 108 L330 112 L340 108 L350 112" stroke="#993C1D" stroke-width="1" fill="none"/>
+<text x="510" y="420" font-size="10" fill="#993C1D">AI自进化反馈</text>
+<text x="510" y="436" font-size="9" fill="#BA7517">绩效归因 → 策略迭代</text>
+
+<!-- Autonomy levels -->
+<rect x="40" y="48" width="120" height="60" rx="8" fill="#1D9E75" opacity="0.1" stroke="#1D9E75" stroke-width="0.5"/>
+<text x="60" y="68" font-size="10" fill="#0F6E56" font-weight="500">高自主区</text>
+<text x="60" y="84" font-size="9" fill="#0F6E56">AI可创造</text>
+<text x="60" y="96" font-size="9" fill="#0F6E56">AI可决策</text>
+<text x="60" y="108" font-size="9" fill="#0F6E56">AI可迭代</text>
+
+<rect x="40" y="600" width="120" height="60" rx="8" fill="#A32D2D" opacity="0.1" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="60" y="620" font-size="10" fill="#791F1F" font-weight="500">不可越区</text>
+<text x="60" y="636" font-size="9" fill="#791F1F">硬风控闸门</text>
+<text x="60" y="648" font-size="9" fill="#791F1F">实盘人工最终审批</text>
+
+<!-- AI autonomy score -->
+<rect x="520" y="48" width="140" height="80" rx="8" fill="var(--color-background-secondary, #f5f5f5)" stroke="var(--color-border-tertiary, #ccc)" stroke-width="0.5"/>
+<text x="540" y="68" font-size="10" fill="var(--color-text-secondary, #888)" font-weight="500">各层自主度评分</text>
+<text x="540" y="84" font-size="9" fill="var(--color-text-secondary, #888)">L1 数据：██████░░ 75%</text>
+<text x="540" y="98" font-size="9" fill="var(--color-text-secondary, #888)">L2 因子：████████░ 88%</text>
+<text x="540" y="112" font-size="9" fill="var(--color-text-secondary, #888)">L3 策略：█████████ 95%</text>
+<text x="540" y="126" font-size="9" fill="var(--color-text-secondary, #888)">L4 组合：███████░░ 70%</text>
+<text x="540" y="140" font-size="9" fill="var(--color-text-secondary, #888)">L5 执行：██████░░░ 65%</text>
+</svg>

@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from quant.risk import RiskEngine
 from quant.data.cache import create_cache
+from quant.data.audit import latest_audit_replays, get_audit_replay
 
 cache = create_cache()
 engine = RiskEngine(cache=cache)
@@ -41,11 +42,28 @@ def action_system_log(req):
     return {"success": True, "data": r}
 
 
+def action_audit_replays(req=None):
+    req = req or {}
+    return {"success": True, "data": latest_audit_replays(cache, limit=int(req.get("limit", 20)))}
+
+
+def action_audit_replay(req=None):
+    req = req or {}
+    return {"success": True, "data": get_audit_replay(
+        cache,
+        run_id=str(req.get("run_id") or ""),
+        decision_id=str(req.get("decision_id") or ""),
+        limit=int(req.get("limit", 100)),
+    )}
+
+
 ACTIONS = {
     "portfolio_risk": action_portfolio_risk,
     "system_health": action_system_health,
     "check": action_system_health,  # 兼容 scripts/web_verify.mjs 旧 action
     "system_log": action_system_log,
+    "audit_replays": action_audit_replays,
+    "audit_replay": action_audit_replay,
 }
 
 if __name__ == "__main__":
@@ -57,15 +75,23 @@ if __name__ == "__main__":
         except Exception:
             print(json.dumps({"success": False, "error": "invalid JSON"}))
             sys.stdout.flush(); continue
+        req_id = req.get("__id")
         action = req.get("action", "system_health")
         handler = ACTIONS.get(action)
         if not handler:
-            print(json.dumps({"success": False, "error": f"unknown action: {action}"}))
+            out = {"success": False, "error": f"unknown action: {action}"}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
             sys.stdout.flush(); continue
         try:
             result = handler(req)
-            print(json.dumps(to_py(result)))
+            result = to_py(result)
+            if req_id and isinstance(result, dict): result["__id"] = req_id
+            if req_id and isinstance(result, dict): result["__id"] = req_id
+            print(json.dumps(result))
         except Exception as e:
             import traceback
-            print(json.dumps({"success": False, "error": str(e)[:500]}))
+            out = {"success": False, "error": str(e)[:500]}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
         sys.stdout.flush()

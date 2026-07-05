@@ -7,6 +7,7 @@
 前提: 后端运行在 localhost:3334，数据已 seed
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -16,6 +17,27 @@ BASE = "http://localhost:3334"
 results = []
 
 
+def _load_token():
+    if os.environ.get("ALPHACOUNCIL_API_TOKEN"):
+        return os.environ["ALPHACOUNCIL_API_TOKEN"]
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == "ALPHACOUNCIL_API_TOKEN":
+                    return v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
+API_TOKEN = _load_token()
+
+
 def call(method, path, body=None, note=""):
     """调用 API，返回 (ok, data_or_error, status)"""
     url = BASE + path
@@ -23,9 +45,12 @@ def call(method, path, body=None, note=""):
         url += "?" + "&".join(f"{k}={v}" for k, v in body.items())
     try:
         if method == "POST":
+            headers = {"Content-Type": "application/json"}
+            if API_TOKEN:
+                headers["X-AlphaCouncil-Token"] = API_TOKEN
             req = urllib.request.Request(
                 url, data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"}, method="POST"
+                headers=headers, method="POST"
             )
         else:
             req = urllib.request.Request(url, method="GET")
@@ -175,7 +200,7 @@ def main():
         oid = data.get("id") or (data.get("order", {}) or {}).get("id")
         assert oid, f"place_order no id: {data}"
     ok_place, place_data = test("POST place_order (买入)", "POST", "/api/execution",
-         {"action": "place_order", "code": "600519", "direction": "buy", "quantity": 100},
+         {"action": "place_order", "code": "600519", "direction": "buy", "quantity": 100, "order_type": "limit", "price": 1800.0},
          validate=v_place)
 
     if ok_place:

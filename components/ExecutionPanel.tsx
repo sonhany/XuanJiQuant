@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Zap, RefreshCw, TrendingUp, TrendingDown, Wallet, Clock, AlertTriangle, Loader2 } from 'lucide-react';
 
-const API_BASE = 'http://localhost:3334';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+const API_TOKEN = (import.meta as any).env?.VITE_ALPHACOUNCIL_API_TOKEN || '';
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...(API_TOKEN ? { 'X-AlphaCouncil-Token': API_TOKEN } : {}) });
 const ACCENT = '#FB923C';
 
 async function api(body: any) {
-  const r = await fetch(`${API_BASE}/api/execution`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(`${API_BASE}/api/execution`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
   const d = await r.json();
   if (!d.success) throw new Error(d.error || '请求失败');
   return d.data;
@@ -74,7 +76,7 @@ const ExecutionPanel: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#F1F5F9' }}>交易执行</div>
-            <div style={{ fontSize: 11, color: '#64748B' }}>模拟下单 · 持仓管理 · 订单记录</div>
+            <div style={{ fontSize: 11, color: '#64748B' }}>手工模拟下单 · 与模拟盘共享账户 · AI 闭环不会从这里触发</div>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

@@ -24,6 +24,7 @@ import math
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,6 +33,11 @@ from quant.data.cache import create_cache
 from quant.data.loader import load_kline_df
 from quant.factor import FactorEngine
 from quant.strategy import StrategyEngine
+from scripts.paper.audit_writer import ensure_schema as ensure_audit_schema, record_run as record_audit_run
+from scripts.paper.decision_reader import load_valid_decision
+from scripts.paper.order_router import place_paper_order
+from scripts.paper.portfolio_rebalancer import execute_target_portfolio
+from scripts.paper.pretrade_risk import check_paper_order
 # 直接复用执行引擎的下单函数 (共享 execution:state 账户)
 from execution_runner import action_place_order, action_positions, action_status
 
@@ -43,6 +49,7 @@ logging.basicConfig(
 logger = logging.getLogger("paper_trader")
 
 cache = create_cache()
+ensure_audit_schema(cache)
 engine = FactorEngine(cache=cache)
 strategy_engine = StrategyEngine(factor_engine=engine, cache=cache)
 
@@ -56,25 +63,30 @@ LOG_MAX = 200  # 日志最多保留条数
 DEFAULT_CONFIG = {
     "strategy_name": "ma_cross",
     "strategy_params": {"fast": 5, "slow": 20},
-    "universe": ["600519", "000858", "600036", "000333", "601318"],
+    "universe": ["600519", "000858", "600036", "000333", "601318"],  # 白名单兜底, candidate_pool 会动态并入
     "position_size_pct": 0.2,   # 单股最大占总权益比例
     "max_positions": 5,         # 最大持仓只数
     "trade_time": "15:05",      # 每日触发时间 HH:MM
-    "enabled": False,
+    "enabled": True,            # 默认开启 daemon (全自主: watchdog 保活, 无需手动启动)
     "skip_data_stale": True,    # 数据不新鲜 (最新 K 线 < 今天) 则跳过本轮, 避免基于过期数据下单
     "risk": {
+        "kill_switch": False,
         "max_position_pct": 0.2,
         "max_gross_exposure_pct": 95,
         "max_position_count": 10,
         "max_orders_per_run": 20,
         "min_cash_buffer_pct": 2,
+        "max_daily_loss_pct": 5,
+        "capital_cap": 0,
         "allow_buy_st": False,
+        "allow_buy_limit_up": False,
+        "allow_sell_limit_down": False,
     },
     "llm": {
-        "enabled": False,              # 默认关闭, 需手动开启
+        "enabled": True,               # 默认启用 AI 个股复核 (全自主决策)
         "provider": "glm",             # glm(主力) | deepseek | qwen | gemini
-        "mode": "off",                 # off | review(审核量化信号) | decide(独立决策)
-        "timeout": 25,                 # LLM 调用超时秒
+        "mode": "review",              # off | review(审核量化信号) | decide(独立决策)
+        "timeout": 45,                 # LLM 调用超时秒
         "max_new_positions": 3,        # LLM 每轮最多新增持仓数
         "confidence_threshold": 0.6,   # review 模式下低于此置信度则否决信号
         "interpret_alerts": True,      # 告警加 AI 解读
@@ -196,8 +208,8 @@ def acquire_lock() -> bool:
         conn.commit()
         return cur.rowcount == 1
     except Exception as e:
-        logger.warning(f"acquire_lock 异常 (放行执行): {e}")
-        return True  # 锁机制故障不应阻断业务
+        logger.warning(f"acquire_lock 异常 (拒绝执行): {e}")
+        return False
 
 
 def release_lock():
@@ -299,6 +311,27 @@ def _risk_reject(code: str, direction: str, qty: int, price: float, summary: dic
 def _pre_trade_check(code: str, direction: str, qty: int, price: float, equity: float,
                      pos_map: dict, cfg: dict, summary: dict) -> bool:
     """模拟盘事前风控。只裁剪/拒绝纸面订单，不改变执行层 API。"""
+    status = action_status()
+    status_data = status.get("data", status) if isinstance(status, dict) else status
+    ok, result = check_paper_order(
+        cache,
+        code=code,
+        direction=direction,
+        qty=qty,
+        price=price,
+        equity=equity,
+        pos_map=pos_map,
+        status_data=status_data,
+        cfg=cfg,
+        summary=summary,
+    )
+    if not ok:
+        logger.info(f"风控网关拒单 {code} {direction} {qty}: {result.get('reason')}")
+    return ok
+
+    # Legacy checks below are intentionally bypassed by the independent risk
+    # gateway above. They are left temporarily as a reference while the sandbox
+    # split is stabilized.
     risk = cfg.get("risk") or {}
     if qty <= 0:
         return False
@@ -340,6 +373,104 @@ def _pre_trade_check(code: str, direction: str, qty: int, price: float, equity: 
     min_cash_pct = float(risk.get("min_cash_buffer_pct", 2))
     if direction == "buy" and (cash - qty * price) / equity * 100 < min_cash_pct - 1e-6:
         return _risk_reject(code, direction, qty, price, summary, "min_cash_buffer_pct", f"现金缓冲低于 {min_cash_pct:.1f}%")
+
+    objective = (summary.get("decision") or {}).get("objective") or {}
+    if direction == "buy" and objective.get("risk_mode") in ("no_new_position", "de_risk"):
+        return _risk_reject(code, direction, qty, price, summary, "objective_risk_mode", f"目标风控模式 {objective.get('risk_mode')} 禁止新增买入")
+
+    max_turnover = float(risk.get("max_daily_turnover_pct", 0) or 0)
+    if max_turnover > 0:
+        attempted_notional = sum(float(o.get("qty", 0)) * price for o in summary.get("orders", []) if o.get("success"))
+        projected_turnover = (attempted_notional + qty * price) / equity * 100
+        if projected_turnover > max_turnover + 1e-6:
+            return _risk_reject(code, direction, qty, price, summary, "max_daily_turnover_pct", f"本轮换手 {projected_turnover:.1f}% > {max_turnover:.1f}%")
+    return True
+
+
+def _normalized_target_weights(decision: dict, cfg: dict) -> list:
+    """读取并裁剪目标权重。权重为 0~1 小数。"""
+    risk = cfg.get("risk") or {}
+    max_weight = float(risk.get("max_position_pct", cfg.get("position_size_pct", 0.2)) or 0.2)
+    max_gross = float(risk.get("max_gross_exposure_pct", 95) or 95) / 100
+    max_count = int(risk.get("max_position_count", cfg.get("max_positions", 5)) or 5)
+    rows = decision.get("target_weights") or []
+    out, total, seen = [], 0.0, set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code", "")).split(".")[0].strip()
+        if not code or code in seen:
+            continue
+        try:
+            weight = float(row.get("target_weight", 0) or 0)
+        except Exception:
+            continue
+        weight = max(0.0, min(max_weight, weight))
+        if total + weight > max_gross:
+            weight = max(0.0, max_gross - total)
+        if weight <= 0:
+            continue
+        out.append({"code": code, "target_weight": weight, "confidence": row.get("confidence"), "reason": row.get("reason", "")})
+        total += weight
+        seen.add(code)
+        if len(out) >= max_count:
+            break
+    return out
+
+
+def _execute_target_portfolio(target_weights: list, klines_dict: dict, pos_map: dict, equity: float, cfg: dict, summary: dict) -> bool:
+    """按 AI 目标权重调仓。返回 True 表示已进入目标组合模式并完成处理。"""
+    return execute_target_portfolio(
+        target_weights=target_weights,
+        klines_dict=klines_dict,
+        pos_map=pos_map,
+        equity=equity,
+        cfg=cfg,
+        summary=summary,
+        last_close_fn=_last_close,
+        pretrade_check_fn=lambda code, direction, qty, price: _pre_trade_check(
+            code, direction, qty, price, equity, pos_map, cfg, summary
+        ),
+        place_fn=lambda code, direction, qty: _place(code, direction, qty, summary),
+    )
+
+    # Legacy rebalancer below is bypassed by scripts.paper.portfolio_rebalancer.
+    if not target_weights:
+        return False
+    weight_map = {x["code"]: float(x["target_weight"]) for x in target_weights}
+    target_codes = set(weight_map)
+    current_codes = {c for c, p in pos_map.items() if int(p.get("quantity", 0) or 0) > 0}
+    all_codes = sorted(target_codes | current_codes)
+    orders = []
+    for code in all_codes:
+        pos = pos_map.get(code)
+        pos_qty = int(pos.get("quantity", 0)) if pos else 0
+        price = float(pos.get("current_price") or pos.get("avg_price") or 0) if pos else 0.0
+        if price <= 0:
+            price = _last_close(klines_dict, code)
+        if price <= 0:
+            summary.setdefault("skipped_orders", []).append({"code": code, "reason": "no_price", "time": _now_iso()})
+            continue
+        target_weight = weight_map.get(code, 0.0)
+        target_qty = int(equity * target_weight / price / 100) * 100 if target_weight > 0 else 0
+        if target_weight > 0 and target_qty <= 0:
+            target_qty = 100
+        delta = target_qty - pos_qty
+        if delta < 0:
+            orders.append((0, code, "sell", abs(delta), price, target_weight))
+        elif delta > 0:
+            orders.append((1, code, "buy", delta, price, target_weight))
+    orders.sort(key=lambda x: x[0])  # 先卖后买, 释放现金
+    summary["portfolio_mode"] = "target_weights"
+    summary["target_weights"] = target_weights
+    summary["target_vs_actual"] = []
+    for _, code, direction, qty, price, target_weight in orders:
+        if _pre_trade_check(code, direction, qty, price, equity, pos_map, cfg, summary):
+            ok = _place(code, direction, qty, summary)
+            if ok:
+                summary["signals"].append({"code": code, "signal": 1 if target_weight > 0 else 0, "action": f"target_{direction}", "qty": qty, "price": price, "target_weight": round(target_weight, 4)})
+        summary["target_vs_actual"].append({"code": code, "direction": direction, "qty": qty, "price": price, "target_weight": round(target_weight, 4)})
+    summary["order_count"] = len(summary["orders"])
     return True
 
 
@@ -353,6 +484,7 @@ def run_once(source: str = "manual") -> dict:
 
     started = _now_iso()
     summary = {
+        "run_id": f"paper-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}",
         "started_at": started,
         "trigger_source": source,
         "strategy": name,
@@ -380,8 +512,20 @@ def run_once(source: str = "manual") -> dict:
     _emit_progress(0, "启动", "running", f"策略={name} 股票池={len(universe)}只")
 
     # 0.5 读决策层统一输出 (ai_loop → ai:decision:latest)
+    # 决策必须满足 quant.ai.contracts 的标准协议, 且高风险交易必须通过 verifier。
+    decision, decision_errors = load_valid_decision(cache, require_verifier=True)
+    if decision_errors:
+        msg = "; ".join(decision_errors)
+        logger.info(f"AI决策不可执行: {msg}")
+        summary["skipped"] = True
+        summary["skip_reason"] = "decision_invalid"
+        summary["decision"] = decision
+        summary["errors"].append(msg)
+        _emit_progress(0, "启动", "skip", "AI决策协议/验证未通过")
+        _finish(summary, cfg)
+        release_lock()
+        return summary
     # 如果决策层判定 trade_policy != normal, 执行层尊重决策, 直接跳过交易。
-    decision = cache.get("ai:decision:latest") or {}
     decision_policy = decision.get("trade_policy")
     if decision_policy and decision_policy != "normal":
         msg = f"决策层策略={decision_policy}, 执行层跳过交易 (决策时间: {decision.get('generated_at','?')})"
@@ -397,6 +541,15 @@ def run_once(source: str = "manual") -> dict:
     summary["decision"] = decision
 
     try:
+        # 0.6 全市场选股/目标组合注入: 把 candidate_pool 与 target_weights 并入当次 universe。
+        # 必须在 load_klines 之前, 否则选股代码无 K 线, _last_close 拿不到价格会跳过。
+        target_codes = [str(x.get("code", "")).split(".")[0].strip() for x in (decision.get("target_weights") or []) if isinstance(x, dict)]
+        inject_pool = list(dict.fromkeys((decision.get("candidate_pool") or []) + target_codes))
+        extra_pool = [c for c in inject_pool if c and c not in universe]
+        if extra_pool:
+            universe = universe + extra_pool
+            logger.info(f"[AI注入] candidate/target {len(extra_pool)} 只并入 universe (本次内存态)")
+
         # 1. 加载 K 线
         _emit_progress(1, "加载K线数据", "running", f"加载 {len(universe)} 只股票...")
         klines_dict = load_klines(universe)
@@ -481,10 +634,38 @@ def run_once(source: str = "manual") -> dict:
         equity = float(status_data.get("total_equity", 1_000_000))
         pct = float(cfg.get("position_size_pct", 0.2))
 
+        # 4.5 AI 目标组合优先: 若 ai_loop 已生成 target_weights, 直接按目标权重调仓。
+        target_weights = _normalized_target_weights(decision, cfg)
+        if target_weights:
+            _emit_progress(4, "目标组合执行", "running", f"目标权重 {len(target_weights)} 只")
+            summary["objective"] = decision.get("objective")
+            summary["portfolio_plan_id"] = decision.get("portfolio_plan_id")
+            handled = _execute_target_portfolio(target_weights, klines_dict, pos_map, equity, cfg, summary)
+            if handled:
+                ok_count = len([o for o in summary["orders"] if o.get("success")])
+                rej_count = len(summary.get("risk_rejections", []))
+                _emit_progress(5, "目标组合风控+下单", "done", f"成交{ok_count}笔 拒单{rej_count}笔")
+                _finish(summary, cfg)
+                _emit_progress(8, "完成", "done", f"目标组合下单{summary.get('order_count', 0)}")
+                return summary
+
         # 5. 计算目标多头池 (受 max_positions 约束)
         desired_long = [c for c, (sig, _) in latest.items() if sig >= 1]
         # 按 score 降序优先排 (score 越大越优先), 无 score 则保持原序
         desired_long.sort(key=lambda c: latest[c][1], reverse=True)
+
+        # 5.5 全市场选股优先: 若决策层有 candidate_pool, 用它直接驱动买入池
+        # (AI 选股 = IC 加权打分 + GLM 复核, 可靠性高于 ma_cross 单策略信号)
+        external_pool = decision.get("candidate_pool") or []
+        if external_pool:
+            valid_pool = [c for c in external_pool if _last_close(klines_dict, c) > 0]
+            if valid_pool:
+                desired_long = valid_pool
+                summary["candidate_pool"] = valid_pool
+                _emit_progress(3, "全市场选股", "done",
+                               f"AI 选股注入 {len(valid_pool)} 只: {','.join(valid_pool[:3])}")
+            else:
+                summary["candidate_pool"] = []
         max_pos = int(cfg.get("max_positions", 5))
 
         # 6. LLM 个股级决策增强 (可选, 失败静默降级为纯量化)
@@ -590,6 +771,21 @@ def run_once(source: str = "manual") -> dict:
 
 def _place(code: str, direction: str, qty: int, summary: dict) -> bool:
     """调用 execution_runner 下市价单, 成功即成交。带每日幂等保护。"""
+    trade_date = datetime.now().strftime("%Y%m%d")
+    return place_paper_order(
+        cache,
+        code=code,
+        direction=direction,
+        qty=qty,
+        summary=summary,
+        action_place_order=action_place_order,
+        decision_done=_decision_done,
+        mark_decision=_mark_decision,
+        trade_date=trade_date,
+        now_fn=_now_iso,
+    )
+
+    # Legacy router below is bypassed by scripts.paper.order_router.
     if qty <= 0:
         return False
     trade_date = datetime.now().strftime("%Y%m%d")
@@ -801,6 +997,11 @@ def _finish(summary: dict, cfg: dict):
         status["last_run_date"] = now.strftime("%Y-%m-%d")
     # 下次运行: 明天 trade_time
     status["next_run"] = f"{(now).strftime('%Y-%m-%d')} {cfg.get('trade_time','15:05')} (next trading day)"
+    try:
+        from scripts.ai_objective import compute_objective_status
+        summary["objective_status"] = compute_objective_status()
+    except Exception:
+        pass
     save_status(status)
     day = now.strftime('%Y%m%d')
     cache.set(f"paper:daily:{day}", summary)
@@ -809,6 +1010,10 @@ def _finish(summary: dict, cfg: dict):
         "config": cfg,
         "status": status,
     })
+    try:
+        record_audit_run(cache, summary, cfg, status)
+    except Exception as e:
+        logger.debug(f"structured audit write failed (non-fatal): {e}")
     append_log({
         "time": summary["finished_at"],
         "strategy": cfg["strategy_name"],

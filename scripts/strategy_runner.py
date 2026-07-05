@@ -314,20 +314,26 @@ if __name__ == "__main__":
             print(clean({"success": False, "error": "invalid JSON"}))
             sys.stdout.flush()
             continue
+        req_id = req.get("__id")
         action = req.get("action", "meta")
         handler = ACTIONS.get(action)
         if not handler:
-            print(clean({"success": False, "error": f"unknown action: {action}"}))
+            out = {"success": False, "error": f"unknown action: {action}"}
+            if req_id: out["__id"] = req_id
+            print(clean(out))
             sys.stdout.flush()
             continue
         try:
             result = handler(req)
+            if req_id and isinstance(result, dict): result["__id"] = req_id
             print(clean(result))
         except Exception as e:
             import traceback
-            print(clean({
+            out = {
                 "success": False,
                 "error": str(e)[:500],
                 "traceback": traceback.format_exc()[:500],
-            }))
+            }
+            if req_id: out["__id"] = req_id
+            print(clean(out))
         sys.stdout.flush()

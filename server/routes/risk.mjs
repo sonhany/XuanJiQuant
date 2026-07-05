@@ -13,7 +13,7 @@ export async function handleRisk(req, res) {
   try {
     runner.ensure();
     const data = await runner.call(body);
-    return json(res, data.success ? 200 : 500, data);
+    return json(res, data.success ? 200 : 400, data);
   } catch (e) {
     return json(res, 500, { success: false, error: `引擎异常: ${e.message}` });
   }

@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { BrainCircuit, Loader2, AlertTriangle, BarChart3, LineChart, Grid3X3, Trophy, RefreshCw } from 'lucide-react';
 
-const API_BASE = 'http://localhost:3334';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+const API_TOKEN = (import.meta as any).env?.VITE_ALPHACOUNCIL_API_TOKEN || '';
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...(API_TOKEN ? { 'X-AlphaCouncil-Token': API_TOKEN } : {}) });
 const ACCENT = '#818CF8';
 
 async function api(body: any) {
-  const r = await fetch(`${API_BASE}/api/factor`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(`${API_BASE}/api/factor`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
   const d = await r.json();
   if (!d.success) throw new Error(d.error || '请求失败');
   return d.data;

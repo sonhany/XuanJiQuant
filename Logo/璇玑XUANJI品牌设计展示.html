@@ -1,0 +1,119 @@
+<svg viewBox="0 0 680 960" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="jadeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#0D7A5F"/>
+    <stop offset="100%" stop-color="#05412F"/>
+  </linearGradient>
+  <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#D4A531"/>
+    <stop offset="100%" stop-color="#9A7510"/>
+  </linearGradient>
+  <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+    <stop offset="0%" stop-color="#FAFAF7"/>
+    <stop offset="100%" stop-color="#F0EDE3"/>
+  </linearGradient>
+  <mask id="ringMask1">
+    <rect width="120" height="120" fill="white"/>
+    <circle cx="60" cy="60" r="25" fill="black"/>
+  </mask>
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#9A7510" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- Background -->
+<rect x="0" y="0" width="680" height="960" fill="url(#bgGrad)"/>
+
+<!-- ========= HERO SECTION ========= -->
+<rect x="0" y="0" width="680" height="280" fill="url(#bgGrad)"/>
+
+<!-- Decorative top line -->
+<line x1="240" y1="20" x2="440" y2="20" stroke="#D4A531" stroke-width="0.5" opacity="0.5"/>
+
+<!-- Logo Symbol (centered) -->
+<g transform="translate(305, 40) scale(1.17)">
+  <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jadeGrad)" mask="url(#ringMask1)"/>
+  <circle cx="60" cy="60" r="25" fill="none" stroke="url(#goldGrad)" stroke-width="2"/>
+  <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+  <polygon points="60,47 69,60 60,73 51,60" fill="url(#goldGrad)"/>
+  <circle cx="60" cy="60" r="3" fill="#05412F"/>
+</g>
+
+<!-- Name -->
+<text x="340" y="210" text-anchor="middle" font-size="42" font-weight="700" fill="#05412F" font-family="KaiTi, STKaiti, serif" letter-spacing="14">璇玑</text>
+<text x="340" y="232" text-anchor="middle" font-size="13" font-weight="600" fill="#9A7510" font-family="system-ui, sans-serif" letter-spacing="6">X U A N J I</text>
+<text x="340" y="255" text-anchor="middle" font-size="11" fill="#888" font-family="KaiTi, STKaiti, serif" letter-spacing="3">璇玑玉衡 · 智齐七政</text>
+
+<!-- Decorative bottom line -->
+<line x1="240" y1="270" x2="440" y2="270" stroke="#D4A531" stroke-width="0.5" opacity="0.5"/>
+
+<!-- ========= SYMBOL ANATOMY ========= -->
+<text x="340" y="305" text-anchor="middle" font-size="13" font-weight="600" fill="#05412F" letter-spacing="3">标识释义</text>
+<line x1="300" y1="315" x2="380" y2="315" stroke="#D4A531" stroke-width="0.5"/>
+
+<!-- Large symbol on left -->
+<g transform="translate(80, 340) scale(2)">
+  <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jadeGrad)" mask="url(#ringMask1)"/>
+  <circle cx="60" cy="60" r="25" fill="none" stroke="url(#goldGrad)" stroke-width="1.5"/>
+  <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.6" opacity="0.4"/>
+  <polygon points="60,47 69,60 60,73 51,60" fill="url(#goldGrad)"/>
+  <circle cx="60" cy="60" r="3" fill="#05412F"/>
+</g>
+
+<!-- Annotations -->
+<!-- Annotation 1: Seven points -->
+<line x1="270" y1="370" x2="310" y2="375" stroke="#9A7510" stroke-width="0.8" marker-end="url(#arr)" fill="none"/>
+<text x="320" y="370" font-size="12" fill="#05412F" font-weight="600">七政星轮</text>
+<text x="320" y="386" font-size="10" fill="#666">七星所指 = 七层架构</text>
+<text x="320" y="400" font-size="9" fill="#999">L0基础→L1数据→L2因子→L3策略</text>
+<text x="320" y="412" font-size="9" fill="#999">→L4组合→L5执行→L6风控→L7自进化</text>
+
+<!-- Annotation 2: Ring -->
+<line x1="270" y1="460" x2="310" y2="460" stroke="#9A7510" stroke-width="0.8" marker-end="url(#arr)" fill="none"/>
+<text x="320" y="458" font-size="12" fill="#05412F" font-weight="600">璇玑玉衡</text>
+<text x="320" y="474" font-size="10" fill="#666">金环 = 古今天算之器</text>
+<text x="320" y="488" font-size="9" fill="#999">源自新石器时代玉制天文仪器</text>
+<text x="320" y="500" font-size="9" fill="#999">以齐七政，以测天道</text>
+
+<!-- Annotation 3: Center diamond -->
+<line x1="270" y1="550" x2="310" y2="550" stroke="#9A7510" stroke-width="0.8" marker-end="url(#arr)" fill="none"/>
+<text x="320" y="548" font-size="12" fill="#05412F" font-weight="600">枢机核心</text>
+<text x="320" y="564" font-size="10" fill="#666">金钻 = AI自主决策中枢</text>
+<text x="320" y="578" font-size="9" fill="#999">枢机之发，荣辱之主也</text>
+<text x="320" y="590" font-size="9" fill="#999">硬风控为底，AI自主为用</text>
+
+<!-- ========= COLOR PALETTE ========= -->
+<text x="340" y="635" text-anchor="middle" font-size="13" font-weight="600" fill="#05412F" letter-spacing="3">色彩体系</text>
+<line x1="300" y1="645" x2="380" y2="645" stroke="#D4A531" stroke-width="0.5"/>
+
+<!-- Jade green swatch -->
+<rect x="120" y="660" width="180" height="60" rx="6" fill="url(#jadeGrad)"/>
+<text x="132" y="682" font-size="11" fill="white" font-weight="600">青玉 Jade Green</text>
+<text x="132" y="700" font-size="9" fill="white" opacity="0.8">#0D7A5F → #05412F</text>
+<text x="132" y="714" font-size="9" fill="white" opacity="0.7">温润如玉 · 生生不息</text>
+
+<!-- Gold swatch -->
+<rect x="380" y="660" width="180" height="60" rx="6" fill="url(#goldGrad)"/>
+<text x="392" y="682" font-size="11" fill="white" font-weight="600">鎏金 Bronze Gold</text>
+<text x="392" y="700" font-size="9" fill="white" opacity="0.8">#D4A531 → #9A7510</text>
+<text x="392" y="714" font-size="9" fill="white" opacity="0.7">吉金煌煌 · 权威尊贵</text>
+
+<!-- ========= CULTURAL BACKGROUND ========= -->
+<text x="340" y="755" text-anchor="middle" font-size="13" font-weight="600" fill="#05412F" letter-spacing="3">命名溯源</text>
+<line x1="300" y1="765" x2="380" y2="765" stroke="#D4A531" stroke-width="0.5"/>
+
+<rect x="80" y="780" width="520" height="100" rx="8" fill="#F5F2E8" stroke="#D4A531" stroke-width="0.3" opacity="0.8"/>
+<text x="340" y="806" text-anchor="middle" font-size="16" fill="#05412F" font-family="KaiTi, STKaiti, serif" letter-spacing="4">「璇玑玉衡，以齐七政」</text>
+<text x="340" y="826" text-anchor="middle" font-size="10" fill="#9A7510">——《尚书·舜典》</text>
+<text x="340" y="848" text-anchor="middle" font-size="10" fill="#666">璇玑：上古天文测算之玉器，三星牙璧，以观测星辰轨迹</text>
+<text x="340" y="862" text-anchor="middle" font-size="10" fill="#666">七政：日月五星，喻系统七层架构，各司其职，浑然一体</text>
+
+<!-- ========= ALTERNATIVE NAMES ========= -->
+<text x="340" y="905" text-anchor="middle" font-size="11" fill="#999" letter-spacing="2">候选名称</text>
+<text x="160" y="930" text-anchor="middle" font-size="12" fill="#9A7510" font-weight="600">天衍 TIANYAN</text>
+<text x="160" y="946" text-anchor="middle" font-size="8" fill="#aaa">大衍之数 · 天道推演</text>
+<text x="340" y="930" text-anchor="middle" font-size="13" fill="#05412F" font-weight="700">璇玑 XUANJI ✓</text>
+<text x="340" y="946" text-anchor="middle" font-size="8" fill="#0D7A5F">璇玑玉衡 · 智齐七政</text>
+<text x="520" y="930" text-anchor="middle" font-size="12" fill="#9A7510" font-weight="600">玄弈 XUANYI</text>
+<text x="520" y="946" text-anchor="middle" font-size="8" fill="#aaa">玄之又玄 · 智弈市场</text>
+</svg>

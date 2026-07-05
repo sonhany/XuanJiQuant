@@ -24,10 +24,68 @@ let daemonStartedAt = null;
 // 区分"用户主动停止" vs "意外崩溃": 只有用户停止才清 enabled, 崩溃保留让 watchdog 重启
 let stoppedByUser = false;
 
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(Number(pid), 0); return true; } catch { return false; }
+}
+
+function killPid(pid) {
+  if (!pidAlive(pid)) return false;
+  try { process.kill(Number(pid)); return true; } catch { return false; }
+}
+
+function clearCachedStatus(clearEnabled = true) {
+  try {
+    spawnSync(PYTHON, ['-c', `
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('ai:scheduler:latest') or {}
+s['running'] = False
+s['crashed'] = False
+c.set('ai:scheduler:latest', s)
+cfg = c.get('ai:scheduler:config') or {}
+if ${JSON.stringify(clearEnabled)}:
+    cfg['enabled'] = False
+c.set('ai:scheduler:config', cfg)
+`], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 5000 });
+  } catch {}
+}
+
+function cachedDaemonPid() {
+  try {
+    const r = spawnSync(PYTHON, ['-c', `
+import json, sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+s = create_cache().get('ai:scheduler:latest') or {}
+print(json.dumps({'running': bool(s.get('running')), 'pid': s.get('pid')}))
+`], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 5000, encoding: 'utf-8' });
+    return JSON.parse((r.stdout || '{}').trim().split('\n').pop() || '{}');
+  } catch { return {}; }
+}
+
 /** 启动 daemon (非阻塞)。若已在运行返回冲突错误。 */
-export function startDaemon(provider = null) {
+export function startDaemon(provider = null, options = {}) {
+  if (options && Object.keys(options).length) {
+    try {
+      const cfgB64 = Buffer.from(JSON.stringify(options)).toString('base64');
+      spawnSync(PYTHON, ['-c', `
+import sys, json, base64
+sys.path.insert(0, '.')
+from scripts.ai_objective import save_autonomous_config
+save_autonomous_config(json.loads(base64.b64decode('${cfgB64}').decode('utf-8')))
+print('OK')
+`], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 5000 });
+    } catch {}
+  }
   if (daemonProc && daemonProc.exitCode === null) {
     return { success: false, error: 'AI 调度器已在运行中' };
+  }
+  const cached = cachedDaemonPid();
+  if (cached.running && pidAlive(cached.pid)) {
+    return { success: false, error: `AI 调度器已在运行中(pid=${cached.pid})` };
   }
   stoppedByUser = false;  // 新启动, 重置标志
   const args = [SCHED_SCRIPT, '--daemon'];
@@ -111,6 +169,15 @@ c.set('ai:scheduler:config', cfg)
     const pid = daemonPid;
     return { success: true, message: '已停止 AI 调度器', pid };
   }
+  const cached = cachedDaemonPid();
+  if (cached.running && pidAlive(cached.pid)) {
+    const ok = killPid(cached.pid);
+    clearCachedStatus(true);
+    stoppedByUser = true;
+    return ok ? { success: true, message: '已停止缓存中的 AI 调度器', pid: cached.pid }
+              : { success: false, error: `无法停止缓存中的 AI 调度器(pid=${cached.pid})` };
+  }
+  clearCachedStatus(true);
   return { success: false, error: '调度器未在运行' };
 }
 

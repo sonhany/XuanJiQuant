@@ -1,0 +1,32 @@
+{
+  "mission": "构建可审计、可回滚、硬风控约束下的 AI 自主进化 A 股量化模拟盘系统",
+  "primary_goals": [
+    "提高策略稳定性和长期风险调整收益",
+    "降低最大回撤和异常交易概率",
+    "提升数据、因子、策略、执行、风控五层自动化程度",
+    "沉淀经验记忆并用于下一轮总控决策",
+    "让所有自动动作具备白名单、验证和审计记录"
+  ],
+  "hard_limits": [
+    "不得绕过硬风控规则",
+    "不得执行未在 ai_tools.json 白名单内的动作",
+    "不得直接执行 LLM 生成的任意 shell 命令或代码",
+    "不得删除交易、风控、回测、审计日志",
+    "不得自动启用未经验证的新因子、新策略或代码修改",
+    "不得默认连接实盘交易接口",
+    "代码自我更新只能生成提案和验证建议，默认不直接修改生产代码"
+  ],
+  "metrics": {
+    "max_drawdown_limit": 0.12,
+    "min_factor_ic": 0.02,
+    "min_validation_sharpe": 0.0,
+    "max_single_position_pct": 0.2,
+    "max_daily_turnover": 0.35
+  },
+  "review_policy": {
+    "low_risk_auto_execute": true,
+    "medium_risk_auto_execute": true,
+    "high_risk_requires_risk_pass": true,
+    "code_update_requires_human_review": true
+  }
+}

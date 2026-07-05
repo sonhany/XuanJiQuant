@@ -321,6 +321,106 @@ def verify_llm_trading_decisions():
     assert_true(s2["active"] is True and s2["decisions_count"] == 2, "LLM 成功时 summary 应记录决策数")
 
 
+def verify_ai_contract_and_gateway():
+    """验证标准 AI 决策协议和独立风控网关。"""
+    from datetime import datetime, timedelta
+    from quant.ai.contracts import DecisionValidationError, validate_ai_decision
+    from quant.risk.gateway import check_order
+
+    valid = {
+        "trade_policy": "normal",
+        "trade_allowed": True,
+        "target_weights": [{"code": "600519", "target_weight": 0.1, "confidence": 0.8}],
+        "rebalance_plan": [{"code": "600519", "action": "buy", "target_weight": 0.1}],
+        "risk_budget": {
+            "max_position_pct": 0.2,
+            "max_gross_exposure_pct": 95,
+            "max_position_count": 10,
+            "max_daily_turnover_pct": 35,
+        },
+        "confidence": 0.8,
+        "valid_until": (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
+        "model_version": "test-model",
+        "prompt_version": "test.v1",
+        "reason_codes": ["unit_test"],
+    }
+    normalized = validate_ai_decision(valid)
+    assert_true(normalized["schema_version"] == "ai_decision.v1", "决策协议应补 schema_version")
+    try:
+        bad = dict(valid)
+        bad.pop("valid_until")
+        validate_ai_decision(bad)
+        raise AssertionError("缺少 required field 应拒绝")
+    except DecisionValidationError:
+        pass
+
+    portfolio = {"cash": 100000, "total_equity": 100000, "positions": {}}
+    cfg = {"risk": {"max_position_pct": 0.2, "max_gross_exposure_pct": 95,
+                    "max_position_count": 10, "min_cash_buffer_pct": 2}}
+    ok = check_order({"code": "600519", "direction": "buy", "quantity": 100,
+                      "price": 100, "decision": normalized}, portfolio, {}, cfg)
+    assert_true(ok["approved"], "合规订单应通过风控网关")
+    reject = check_order({"code": "600519", "direction": "buy", "quantity": 50,
+                          "price": 100, "decision": normalized}, portfolio, {}, cfg)
+    assert_true(not reject["approved"] and "not_board_lot" in reject["reasons"], "非整手买入应被网关拒绝")
+    fuse = check_order({"code": "600519", "direction": "buy", "quantity": 100,
+                        "price": 100, "decision": normalized},
+                       {**portfolio, "daily_pnl": -6000},
+                       {}, {"risk": {**cfg["risk"], "max_daily_loss_pct": 5}})
+    assert_true(not fuse["approved"] and "daily_loss_fuse" in fuse["reasons"], "daily loss fuse should block")
+    t1 = check_order({"code": "600519", "direction": "sell", "quantity": 200,
+                      "price": 100, "decision": normalized},
+                     {"cash": 0, "total_equity": 100000, "positions": {"600519": {"quantity": 300, "available_qty": 100, "avg_price": 90}}},
+                     {}, cfg)
+    assert_true(not t1["approved"] and "t1_available_qty" in t1["reasons"], "T+1 available qty should block sell")
+    limit_up = check_order({"code": "600519", "direction": "buy", "quantity": 100,
+                            "price": 100, "decision": normalized}, portfolio,
+                           {"limit_state": "up"}, cfg)
+    assert_true(not limit_up["approved"] and "limit_up_blocked" in limit_up["reasons"], "limit-up buy should block by default")
+
+
+def verify_structured_audit_and_live_guard():
+    """验证结构化审计表和实盘默认保护边界。"""
+    from quant.data.cache import create_cache
+    from quant.data.audit import ensure_audit_schema, write_audit_event, write_order_event, write_risk_event, get_audit_replay
+    from quant.execution.broker import LiveBrokerAdapter
+
+    cache = create_cache()
+    assert_true(ensure_audit_schema(cache), "SQLite 审计 schema 应创建成功")
+    conn = getattr(cache, "_conn", None)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    for t in ("ai_decisions", "orders", "trades", "positions_snapshots", "risk_events", "model_calls", "audit_events"):
+        assert_true(t in tables, f"缺少结构化审计表: {t}")
+    run_id = "unit-run-001"
+    decision_id = "unit-decision-001"
+    write_audit_event(cache, "paper_run", {"run_id": run_id, "decision_id": decision_id}, source="unit")
+    write_risk_event(cache, {"run_id": run_id, "decision_id": decision_id, "code": "600519", "direction": "buy", "reason": "unit", "approved": False})
+    write_order_event(cache, {"run_id": run_id, "decision_id": decision_id, "order_id": "O-unit", "code": "600519", "direction": "buy", "quantity": 100, "status": "rejected"})
+    replay = get_audit_replay(cache, run_id=run_id, decision_id=decision_id)
+    assert_true(replay["success"] and replay["risk_events"] and replay["orders"], "audit replay should join run records")
+
+    live = LiveBrokerAdapter()
+    r = live.submit_order({"code": "600519", "direction": "buy", "quantity": 100})
+    assert_true(not r["success"] and r["mode"] == "manual_approve_required", "实盘适配器默认必须禁止自动下单")
+
+
+def verify_promotion_and_shadow_signals():
+    """验证晋升连续窗口和新闻/宏观 shadow-only 信号。"""
+    from quant.ai.promotion import apply_promotion_state
+    from quant.ai.shadow_signals import build_shadow_signals
+    from quant.data.cache import MemoryCache
+
+    c = MemoryCache()
+    entry = {"name": "f1", "eval": {"passed": True, "best_abs_ic": 0.04, "best_ir": 0.4, "n_records": 120}}
+    states = [apply_promotion_state("factor", entry, c)["promotion_state"] for _ in range(3)]
+    assert_true(states[0] == "shadow" and states[-1] == "paper_active", "promotion should require consecutive passes")
+    strong = {"name": "f1", "eval": {"passed": True, "best_abs_ic": 0.07, "best_ir": 0.7, "n_records": 240}}
+    states2 = [apply_promotion_state("factor", strong, c)["promotion_state"] for _ in range(5)]
+    assert_true(states2[-1] == "production_candidate", "production candidate should require strong streak")
+    shadow = build_shadow_signals(c, source="unit")
+    assert_true(shadow["mode"] == "shadow_only" and not shadow["can_trigger_order"], "shadow signals must not trade")
+
+
 def main():
     verify_execution_rules()
     verify_fees()
@@ -331,6 +431,9 @@ def main():
     verify_benchmark_metrics()
     verify_llm_client()
     verify_llm_trading_decisions()
+    verify_ai_contract_and_gateway()
+    verify_structured_audit_and_live_guard()
+    verify_promotion_and_shadow_signals()
     verify_alert_ai_hint()
     print("OK verify_paper_rules")
 

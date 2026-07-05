@@ -24,15 +24,18 @@ export function logRequest(req, status, extra) {
 // ─── 请求体解析 ──────────────────────────
 
 export function readBody(req) {
+  if (req._parsedBody) return Promise.resolve(req._parsedBody);
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', () => {
       try {
         const parsed = body ? JSON.parse(body) : {};
+        req._parsedBody = parsed;
         resolve(parsed);
       } catch (e) {
         console.log('[readBody] parse error:', e.message, 'body:', JSON.stringify(body));
+        req._parsedBody = {};
         resolve({});
       }
     });

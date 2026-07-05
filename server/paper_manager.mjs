@@ -20,12 +20,53 @@ let daemonProc = null;
 let daemonPid = null;
 let daemonStartedAt = null;
 
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(Number(pid), 0); return true; } catch { return false; }
+}
+
+function killPid(pid) {
+  if (!pidAlive(pid)) return false;
+  try { process.kill(Number(pid)); return true; } catch { return false; }
+}
+
+function clearCachedStatus() {
+  try {
+    spawnSync(PYTHON, ['-c', `
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('paper:status') or {}
+s['running'] = False
+c.set('paper:status', s)
+`], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 5000 });
+  } catch {}
+}
+
+function cachedDaemonPid() {
+  try {
+    const r = spawnSync(PYTHON, ['-c', `
+import json, sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+s = create_cache().get('paper:status') or {}
+print(json.dumps({'running': bool(s.get('running')), 'pid': s.get('pid')}))
+`], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 5000, encoding: 'utf-8' });
+    return JSON.parse((r.stdout || '{}').trim().split('\n').pop() || '{}');
+  } catch { return {}; }
+}
+
 /**
  * 启动 daemon (非阻塞)。若已在运行返回冲突错误。
  */
 export function startDaemon() {
   if (daemonProc && daemonProc.exitCode === null) {
     return { success: false, error: '模拟盘调度器已在运行中' };
+  }
+  const cached = cachedDaemonPid();
+  if (cached.running && pidAlive(cached.pid)) {
+    return { success: false, error: `模拟盘调度器已在运行中(pid=${cached.pid})` };
   }
   daemonProc = spawn(PYTHON, [PAPER_SCRIPT], {
     cwd: ROOT_DIR,
@@ -86,6 +127,14 @@ export function stopDaemon() {
     daemonPid = null;
     return { success: true, message: '已停止模拟盘调度器', pid };
   }
+  const cached = cachedDaemonPid();
+  if (cached.running && pidAlive(cached.pid)) {
+    const ok = killPid(cached.pid);
+    clearCachedStatus();
+    return ok ? { success: true, message: '已停止缓存中的模拟盘调度器', pid: cached.pid }
+              : { success: false, error: `无法停止缓存中的调度器(pid=${cached.pid})` };
+  }
+  clearCachedStatus();
   return { success: false, error: '调度器未在运行' };
 }
 

@@ -186,7 +186,7 @@ def fetch_quotes(codes: Iterable[str], batch: int = 50) -> Dict[str, Dict]:
 # 腾讯没有官方"全市场代码列表"接口；我们用一份精选种子列表
 # 实际运行时会通过 fetch_quotes 失败回退过滤出有效代码
 SEED_UNIVERSE_HINT = """\
-通过 reset_and_seed.py 主动维护股票池；
+通过 seed.py / download_all.py 主动维护股票池；
 首次启动时使用内置 SEED_CODES（沪深 300 + 创业板 50 + 科创板 50）；
 后续可通过追加 codes.txt 扩展。
 """

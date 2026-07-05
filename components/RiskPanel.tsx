@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Shield, RefreshCw, Server, Database, BrainCircuit, Zap, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Shield, RefreshCw, Server, Database, BrainCircuit, Zap, CheckCircle, XCircle, AlertCircle, FileSearch } from 'lucide-react';
 
-const API_BASE = 'http://localhost:3334';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+const API_TOKEN = (import.meta as any).env?.VITE_ALPHACOUNCIL_API_TOKEN || '';
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...(API_TOKEN ? { 'X-AlphaCouncil-Token': API_TOKEN } : {}) });
 const ACCENT = '#F472B6';
 
 async function api(body: any) {
-  const r = await fetch(`${API_BASE}/api/risk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(`${API_BASE}/api/risk`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
   const d = await r.json();
   if (!d.success) throw new Error(d.error || '请求失败');
   return d.data;
@@ -45,22 +47,34 @@ const layerLabels: Record<string, string> = {
 const RiskPanel: React.FC = () => {
   const [risk, setRisk] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
+  const [replays, setReplays] = useState<any[]>([]);
+  const [replay, setReplay] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const [r, h] = await Promise.all([
+      const [r, h, a] = await Promise.all([
         api({ action: 'portfolio_risk' }),
         api({ action: 'system_health' }),
+        api({ action: 'audit_replays', limit: 12 }),
       ]);
-      setRisk(r); setHealth(h);
+      setRisk(r); setHealth(h); setReplays(a || []);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   }, []);
 
   useEffect(() => { refresh(); }, []);
+
+  const loadReplay = async (row: any) => {
+    setLoading(true); setError('');
+    try {
+      const data = await api({ action: 'audit_replay', run_id: row?.run_id, decision_id: row?.decision_id, limit: 80 });
+      setReplay(data);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
@@ -158,6 +172,74 @@ const RiskPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Audit Replay */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <FileSearch style={{ width: 14, height: 14, color: '#475569' }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#94A3B8' }}>AI 决策回放</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) 1fr', gap: 12 }}>
+          <div style={{ background: '#111827', border: '1px solid #1E293B', borderRadius: 8, padding: 12, minHeight: 180 }}>
+            <div style={{ fontSize: 11, color: '#64748B', marginBottom: 10 }}>最近运行</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {(replays || []).slice(0, 10).map((r: any, idx: number) => (
+                <button key={`${r.run_id || idx}-${r.created_at}`} onClick={() => loadReplay(r)}
+                  style={{ textAlign: 'left', background: replay?.run_id === r.run_id ? '#172554' : '#0B1220', border: '1px solid #1E293B', borderRadius: 6, padding: 8, color: '#CBD5E1', cursor: 'pointer' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#E2E8F0', overflowWrap: 'anywhere' }}>{r.run_id || r.decision_id || 'latest'}</div>
+                  <div style={{ fontSize: 10, color: '#64748B', marginTop: 3 }}>{r.event_type} · {r.created_at}</div>
+                </button>
+              ))}
+              {(!replays || replays.length === 0) && <div style={{ fontSize: 12, color: '#475569' }}>暂无可回放记录</div>}
+            </div>
+          </div>
+          <div style={{ background: '#111827', border: '1px solid #1E293B', borderRadius: 8, padding: 12, minHeight: 180 }}>
+            {!replay ? (
+              <div style={{ fontSize: 12, color: '#475569' }}>选择左侧运行记录查看当时决策、风控原因、订单与成交。</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: 10 }}>
+                {[
+                  ['决策', replay.decisions?.length || 0],
+                  ['风控事件', replay.risk_events?.length || 0],
+                  ['订单', replay.orders?.length || 0],
+                  ['成交', replay.trades?.length || 0],
+                ].map(([label, value]: any) => (
+                  <div key={label} style={{ border: '1px solid #1E293B', borderRadius: 6, padding: 10 }}>
+                    <div style={{ fontSize: 10, color: '#64748B' }}>{label}</div>
+                    <div style={{ fontSize: 20, color: '#F8FAFC', fontWeight: 800 }}>{value}</div>
+                  </div>
+                ))}
+                <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 6 }}>风控拒单解释</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflow: 'auto' }}>
+                      {(replay.risk_events || []).map((e: any, idx: number) => (
+                        <div key={idx} style={{ border: '1px solid #1E293B', borderRadius: 6, padding: 8, fontSize: 11 }}>
+                          <div style={{ color: e.approved ? '#4ADE80' : '#F87171', fontWeight: 700 }}>{e.code || '--'} {e.direction || ''} · {e.reason || '--'}</div>
+                          <div style={{ color: '#64748B', marginTop: 3, overflowWrap: 'anywhere' }}>{(e.payload?.reasons || []).join(', ') || e.created_at}</div>
+                        </div>
+                      ))}
+                      {(!replay.risk_events || replay.risk_events.length === 0) && <div style={{ fontSize: 12, color: '#475569' }}>本次无风控事件</div>}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 6 }}>订单与成交</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflow: 'auto' }}>
+                      {[...(replay.orders || []), ...(replay.trades || [])].slice(0, 40).map((e: any, idx: number) => (
+                        <div key={idx} style={{ border: '1px solid #1E293B', borderRadius: 6, padding: 8, fontSize: 11 }}>
+                          <div style={{ color: '#E2E8F0', fontWeight: 700 }}>{e.order_id || e.trade_id || e.id || '--'} · {e.code || '--'} {e.direction || ''}</div>
+                          <div style={{ color: '#64748B', marginTop: 3 }}>{e.status || 'trade'} · {e.created_at}</div>
+                        </div>
+                      ))}
+                      {(!replay.orders?.length && !replay.trades?.length) && <div style={{ fontSize: 12, color: '#475569' }}>本次无订单或成交</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {!health && !risk && !error && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '60px 0', color: '#334155' }}>

@@ -30,6 +30,43 @@ LATEST_KEY = "ai:operator:latest"
 TASK_KEY_PREFIX = "ai:tasks"
 DAILY_KEY_PREFIX = "ai:operator:daily"
 LESSONS_KEY = "ai:memory:lessons"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MANIFEST_PATH = os.path.join(ROOT, "ai_manifest.json")
+TOOLS_PATH = os.path.join(ROOT, "ai_tools.json")
+
+
+def _load_json(path: str, fallback):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return fallback
+
+
+def _tool_config() -> tuple[dict, dict, dict]:
+    manifest = _load_json(MANIFEST_PATH, {})
+    cfg = _load_json(TOOLS_PATH, {"tools": [], "action_aliases": {}})
+    tools = {t.get("name"): t for t in cfg.get("tools", []) if t.get("name")}
+    aliases = cfg.get("action_aliases", {}) or {}
+    return manifest, tools, aliases
+
+
+def _normalize_actions(actions: list) -> list:
+    """兼容旧 action 格式, 补齐 tool/risk 字段。"""
+    _manifest, tools, aliases = _tool_config()
+    out = []
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        row = dict(action)
+        tool = row.get("tool") or aliases.get(row.get("action"), "")
+        if tool:
+            row["tool"] = aliases.get(tool, tool)
+        meta = tools.get(row.get("tool"), {})
+        row.setdefault("risk", meta.get("risk", "low" if not row.get("tool") else "medium"))
+        row.setdefault("auto_allowed", meta.get("auto_allowed", False))
+        out.append(row)
+    return out
 
 
 def _today() -> str:
@@ -78,9 +115,23 @@ def _collect_state() -> dict:
     bm = report.get("benchmark", {}) if isinstance(report, dict) else {}
     account = report.get("account", {}) if isinstance(report, dict) else {}
 
+    manifest, tools, _aliases = _tool_config()
+    memory_summary = cache.get("ai:memory:summary") or {}
+
     return {
         "timestamp": _now(),
         "date": _today(),
+        "manifest": {
+            "mission": manifest.get("mission"),
+            "primary_goals": manifest.get("primary_goals", [])[:5],
+            "hard_limits": manifest.get("hard_limits", [])[:8],
+            "metrics": manifest.get("metrics", {}),
+        },
+        "available_tools": [
+            {"name": name, "risk": meta.get("risk"), "auto_allowed": meta.get("auto_allowed")}
+            for name, meta in tools.items()
+        ],
+        "memory_summary": memory_summary,
         "config": {
             "strategy_name": cfg.get("strategy_name"),
             "universe_size": len(cfg.get("universe", []) or []),
@@ -95,7 +146,7 @@ def _collect_state() -> dict:
             "status": "stale" if data_stale else ("ok" if latest_date else "missing"),
         },
         "alpha_factory": {
-            "factor_snapshot_exists": bool(cache.get("factor:snapshot")),
+            "factor_snapshot_exists": bool(cache.get("factor:snapshot")) or os.path.exists(os.path.join(ROOT, "data", "factor_snapshot.pkl")),
             "approved_ai_factors": len(cache.get("ai:factor:approved") or []),
             "candidate_ai_factors": len(cache.get("ai:factor:candidates") or []),
         },
@@ -147,7 +198,7 @@ def _fallback_plan(state: dict, reason: str = "") -> dict:
         "paper_trade_allowed": trade_allowed,
         "trade_policy": "normal" if trade_allowed else "no_new_position",
         "risk_notes": ["数据过期或严重告警时禁止新开仓"] if not trade_allowed else [],
-        "actions": tasks,
+        "actions": _normalize_actions(tasks),
         "self_verification": [
             "检查数据最新日期是否等于当前交易日",
             "运行因子IC评估并保存结果",
@@ -161,6 +212,10 @@ def _fallback_plan(state: dict, reason: str = "") -> dict:
 def _build_prompt(state: dict) -> str:
     compact = {
         "date": state.get("date"),
+        "mission": state.get("manifest", {}).get("mission"),
+        "hard_limits": state.get("manifest", {}).get("hard_limits"),
+        "available_tools": state.get("available_tools"),
+        "memory_summary": state.get("memory_summary"),
         "data_layer": state.get("data_layer"),
         "strategy": state.get("strategy_layer", {}).get("last_strategy"),
         "last_result": state.get("strategy_layer", {}).get("last_result"),
@@ -203,7 +258,7 @@ def _plan_from_ai_text(state: dict, provider: str, text: str) -> dict:
         "paper_trade_allowed": trade_allowed,
         "trade_policy": "normal" if trade_allowed else "no_new_position",
         "risk_notes": ["数据过期或严重告警时禁止新开仓"] if not trade_allowed else [],
-        "actions": _rule_actions(state),
+        "actions": _normalize_actions(_rule_actions(state)),
         "self_verification": [
             "检查数据最新日期是否等于当前交易日",
             "运行因子IC评估并保存结果",
@@ -224,13 +279,14 @@ def run_operator(provider: str = None) -> dict:
     system = (
         "你是A股量化模拟盘系统的AI总控 Operator。你要根据五层状态生成今日操作计划。"
         "你不能直接下单、不能绕过风控、不能要求执行任意代码。"
+        "你只能从 available_tools 里选择 tool, 不能发明工具名。"
         "你必须输出一个JSON对象,不要输出Markdown,不要输出推理过程。"
         "JSON schema如下:"
         "{\"summary\":\"简短中文摘要\","
         "\"paper_trade_allowed\":false,"
         "\"trade_policy\":\"normal|reduce_only|no_new_position\","
         "\"risk_notes\":[\"...\"],"
-        "\"actions\":[{\"layer\":\"data|factor|strategy|execution|risk\",\"action\":\"...\",\"priority\":\"high|medium|low\",\"reason\":\"...\"}],"
+        "\"actions\":[{\"layer\":\"data|factor|strategy|execution|risk|memory|update\",\"tool\":\"available_tools中的name\",\"action\":\"...\",\"priority\":\"high|medium|low\",\"risk\":\"low|medium|high\",\"reason\":\"...\"}],"
         "\"self_verification\":[\"...\"],"
         "\"next_iteration\":[\"...\"]}。"
     )
@@ -257,7 +313,7 @@ def run_operator(provider: str = None) -> dict:
                     "paper_trade_allowed": bool(data.get("paper_trade_allowed", False)),
                     "trade_policy": data.get("trade_policy", "no_new_position"),
                     "risk_notes": data.get("risk_notes", []),
-                    "actions": data.get("actions", []),
+                    "actions": _normalize_actions(data.get("actions", [])),
                     "self_verification": data.get("self_verification", []),
                     "next_iteration": data.get("next_iteration", []),
                     "state": state,

@@ -29,6 +29,7 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from quant.ai.promotion import apply_promotion_state
 from quant.data.cache import create_cache
 
 cache = create_cache()
@@ -322,6 +323,7 @@ def run_factor_factory(provider: str = "glm", n_candidates: int = 3) -> dict:
             "eval": eval_result,
             "evaluated_at": _now(),
         }
+        result_entry = apply_promotion_state("factor", result_entry, cache)
         results.append(result_entry)
         cache.set(f"ai:factor:eval:{name}", result_entry)
         
@@ -354,6 +356,7 @@ def get_status() -> dict:
         "candidates": cache.get("ai:factor:candidates") or [],
         "approved": cache.get("ai:factor:approved") or [],
         "rejected": cache.get("ai:factor:rejected") or [],
+        "promotion": cache.get("ai:factor:promotion") or {},
     }
 
 

@@ -8,7 +8,7 @@
   - 非交易日 / 夜间: 每 2 小时一次全球动态 + 数据检查
 
 设计原则:
-  - 单例 daemon (ai_loop_manager.mjs 管理), 同一时刻只跑一个
+  - 单例 daemon (server/ai_scheduler_manager.mjs 管理), 同一时刻只跑一个
   - 每轮失败不退出, 记录到 errors, 继续下一轮 (容错)
   - 状态实时写入 ai:scheduler:latest, 供驾驶舱/watchdog 监控
   - 默认 provider 从 paper:config.llm.provider 读, 兜底 glm
@@ -89,9 +89,19 @@ def determine_mode(now: datetime = None) -> str:
     return "idle"
 
 
-def _interval_for_mode(mode: str) -> int:
-    """各模式对应的轮询间隔 (秒)。"""
-    return {"intraday": 600, "postclose": 1800, "idle": 7200}.get(mode, 1800)
+def _interval_for_mode(mode: str, cfg: dict = None) -> int:
+    """各模式对应的轮询间隔 (秒), 支持全局自主配置覆盖。"""
+    if cfg is None:
+        try:
+            cfg = _read_cfg()
+        except Exception:
+            cfg = {}
+    defaults = {"intraday": 600, "postclose": 1800, "idle": 7200}
+    key = f"{mode}_interval_sec"
+    try:
+        return int((cfg or {}).get(key) or defaults.get(mode, 1800))
+    except Exception:
+        return defaults.get(mode, 1800)
 
 
 def _default_provider() -> str:
@@ -104,8 +114,17 @@ def _default_provider() -> str:
 
 
 def _read_cfg() -> dict:
-    """读调度器配置 (可被前端覆盖)。"""
-    return cache.get(SCHED_CFG_KEY) or {"enabled": False, "provider": "glm"}
+    """读调度器配置 (可被前端覆盖), 合并全局自主目标配置。"""
+    try:
+        from scripts.ai_objective import load_autonomous_config
+        auto_cfg = load_autonomous_config()
+    except Exception:
+        auto_cfg = {}
+    sched_cfg = cache.get(SCHED_CFG_KEY) or {}
+    merged = {**auto_cfg, **sched_cfg}
+    merged.setdefault("enabled", False)
+    merged.setdefault("provider", auto_cfg.get("provider") or "glm")
+    return merged
 
 
 # ── 轻量巡检 (盘中) ──────────────────────────────────────
@@ -138,6 +157,21 @@ def _run_light_cycle(provider: str) -> dict:
     except Exception as e:
         errors.append(f"risk: {str(e)[:120]}")
 
+    # L6 止盈止损检查 (盘中每轮自动扫, 触发即平仓, 硬规则不经 LLM)
+    try:
+        # execution_runner 是 stdin JSON-RPC 进程, 这里用一次性调用
+        import subprocess, sys as _sys, json as _json
+        r = subprocess.run(
+            [_sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                           'scripts', 'execution_runner.py')],
+            input=_json.dumps({"action": "check_stops"}),
+            capture_output=True, text=True, timeout=30, encoding='utf-8',
+            env={**os.environ, 'PYTHONIOENCODING': 'utf-8', 'QUANT_SKIP_NODE_PROXY': '1'})
+        if r.stdout and r.stdout.strip():
+            steps["stops"] = _json.loads(r.stdout.strip().split('\n')[-1])
+    except Exception as e:
+        errors.append(f"stops: {str(e)[:120]}")
+
     return {
         "mode": "intraday",
         "started_at": started,
@@ -148,14 +182,73 @@ def _run_light_cycle(provider: str) -> dict:
 
 
 # ── 重巡检 (盘后) ────────────────────────────────────────
+SNAPSHOT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             'data', 'factor_snapshot.pkl')
+
+
+def _should_rebuild_snapshot() -> bool:
+    """因子快照是否需要重算: 当天还没算过则 True (每天最多一次, 避免 30min×多轮)。"""
+    try:
+        import pickle
+        if not os.path.exists(SNAPSHOT_FILE):
+            return True
+        with open(SNAPSHOT_FILE, 'rb') as f:
+            snap = pickle.load(f)
+        saved_at = snap.get('saved_at', 0) if isinstance(snap, dict) else 0
+        saved_date = datetime.fromtimestamp(saved_at).strftime('%Y%m%d') if saved_at else ''
+        return saved_date != _today()
+    except Exception:
+        return True  # 异常保守重算
+
+
 def _run_heavy_cycle(provider: str) -> dict:
-    """盘后重巡检: 完整 9 步闭环, 可能触发模拟盘交易。"""
+    """盘后重巡检: 先刷新全市场数据+因子快照, 再跑完整 9 步闭环。
+
+    自动化关键: 把原本手动跑的 daily_update + evaluate_factors 串到 run_loop 之前,
+    彻底消除数据层人工干预 (解决最大断点)。失败不阻断后续闭环。
+    """
     from scripts.ai_loop import run_loop
     started = _now()
+    pre_steps = {}
+
+    # Step 0: 刷新全市场 K 线 (盘后收盘数据入库)
+    try:
+        from scripts.daily_update import incremental_klines, sync_universe
+        codes = sync_universe()
+        inc = incremental_klines(codes, cache)
+        pre_steps["data_refresh"] = {"ok": inc.get("ok", 0), "err": inc.get("err", 0),
+                                     "new_bars": inc.get("new_bars", 0)}
+    except Exception as e:
+        pre_steps["data_refresh_error"] = str(e)[:150]
+
+    # Step 0.5: 数据更新后重算因子快照 (每日一次, ~30min)
+    if _should_rebuild_snapshot():
+        try:
+            import subprocess, sys as _sys
+            eval_script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                       'scripts', 'evaluate_factors.py')
+            r = subprocess.run([_sys.executable, eval_script, '--no-cache'],
+                               cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               timeout=2400, capture_output=True, text=True,
+                               env={**os.environ, 'PYTHONIOENCODING': 'utf-8', 'QUANT_SKIP_NODE_PROXY': '1'})
+            if r.returncode == 0:
+                pre_steps["factor_rebuilt"] = True
+            else:
+                pre_steps["factor_rebuilt"] = False
+                pre_steps["factor_rebuild_error"] = ((r.stderr or r.stdout or "evaluate_factors failed")[-300:])
+        except Exception as e:
+            pre_steps["factor_rebuilt"] = False
+            pre_steps["factor_rebuild_error"] = str(e)[:150]
+
     try:
         result = run_loop(provider, trigger_paper=True, source="scheduler")
         result["mode"] = "postclose"
         result["started_at"] = started
+        # 合并预处理的步骤结果 (data_refresh / factor_rebuilt)
+        if isinstance(result.get("steps"), dict):
+            result["steps"].update(pre_steps)
+        else:
+            result["pre_steps"] = pre_steps
         return result
     except Exception as e:
         return {
@@ -163,7 +256,7 @@ def _run_heavy_cycle(provider: str) -> dict:
             "started_at": started,
             "finished_at": _now(),
             "errors": [f"loop: {str(e)[:200]}", traceback.format_exc()[-300:]],
-            "steps": {},
+            "steps": pre_steps,
         }
 
 
@@ -193,7 +286,8 @@ def _run_idle_cycle(provider: str) -> dict:
 
 def run_one_cycle(provider: str = None) -> dict:
     """跑当前时段对应的一轮巡检。"""
-    provider = provider or _default_provider()
+    cfg = _read_cfg()
+    provider = provider or cfg.get("provider") or _default_provider()
     mode = determine_mode()
     if mode == "intraday":
         result = _run_light_cycle(provider)
@@ -204,12 +298,18 @@ def run_one_cycle(provider: str = None) -> dict:
 
     # 写入最新状态
     now = datetime.now()
-    interval = _interval_for_mode(mode)
+    interval = _interval_for_mode(mode, cfg)
     next_cycle = (now.timestamp() + interval)
+    try:
+        from scripts.ai_objective import compute_objective_status
+        objective_status = compute_objective_status(cfg)
+    except Exception:
+        objective_status = cache.get("ai:objective:latest")
     status = {
         "running": True,
         "mode": mode,
         "provider": provider,
+        "objective": objective_status,
         "last_cycle": result,
         "last_cycle_at": _now(),
         "next_cycle_at": datetime.fromtimestamp(next_cycle).strftime("%Y-%m-%d %H:%M:%S"),
@@ -236,12 +336,24 @@ def get_status() -> dict:
     s["current_mode"] = determine_mode()
     s["is_trading_day"] = _is_trading_day()
     s["config"] = cache.get(SCHED_CFG_KEY) or {"enabled": False, "provider": "glm"}
+    s["verifier"] = cache.get("ai:verifier:latest")
+    s["tool_executor"] = cache.get("ai:tool_executor:latest")
+    s["memory"] = cache.get("ai:memory:stats")
+    s["updates"] = cache.get("ai:updates:latest")
     return s
 
 
 def run_daemon(provider: str = None):
     """守护进程: 根据时段自动巡检。"""
-    provider = provider or _default_provider()
+    cfg = _read_cfg()
+    provider = provider or cfg.get("provider") or _default_provider()
+    cfg.update({"enabled": True, "provider": provider, "autonomous_enabled": bool(cfg.get("enabled", True))})
+    cache.set(SCHED_CFG_KEY, cfg)
+    try:
+        from scripts.ai_objective import save_autonomous_config
+        save_autonomous_config({"enabled": True, "provider": provider})
+    except Exception:
+        pass
     # 标记 daemon 启动
     cache.set(SCHED_KEY, {
         "running": True,
@@ -250,14 +362,15 @@ def run_daemon(provider: str = None):
         "mode": determine_mode(),
         "provider": provider,
         "cycles_count": 0,
+        "objective": cache.get("ai:objective:latest"),
     })
-    cache.set(SCHED_CFG_KEY, {"enabled": True, "provider": provider})
     print(f"[AI Scheduler] daemon started pid={os.getpid()} provider={provider}", flush=True)
 
     while True:
         try:
             # 每轮重新读 provider (允许前端热切换)
-            provider = _default_provider()
+            cfg = _read_cfg()
+            provider = cfg.get("provider") or _default_provider()
             mode = determine_mode()
             result = run_one_cycle(provider)
             print(f"[AI Scheduler] {result['last_cycle_at']} mode={mode} errors={len(result['last_cycle'].get('errors', []))}", flush=True)
@@ -265,7 +378,7 @@ def run_daemon(provider: str = None):
             print(f"[AI Scheduler] cycle error: {e}", flush=True)
             traceback.print_exc()
         # 按当前时段 sleep
-        time.sleep(_interval_for_mode(determine_mode()))
+        time.sleep(_interval_for_mode(determine_mode(), _read_cfg()))
 
 
 def main():

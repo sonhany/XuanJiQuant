@@ -4,7 +4,7 @@
  */
 import http from 'http';
 import { createRouter } from './router.mjs';
-import { PORT } from './config.mjs';
+import { PORT, HOST } from './config.mjs';
 import { watchdogTick } from './watchdog.mjs';
 
 // ─── 创建 HTTP 服务器 ─────────────────────
@@ -15,8 +15,8 @@ console.log('[DB] 默认存储: SQLite (data/quant.db)；如需 Redis 设环境�
 
 // ─── 启动监听 ─────────────────────────────
 
-server.listen(PORT, () => {
-  console.log(`[API Server] 本地代理服务器运行在 http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[API Server] 本地代理服务器运行在 http://${HOST}:${PORT}`);
 
   // ─── 看门狗: daemon 自愈 + 持久进程保活 ──────
   // 首次延迟 30s (等所有路由模块的 PersistentRunner.ensure 完成), 之后每 60s 巡检一次。

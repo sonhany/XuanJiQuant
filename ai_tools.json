@@ -1,0 +1,149 @@
+{
+  "tools": [
+    {
+      "name": "refresh_data",
+      "description": "同步股票池并增量刷新 K 线数据",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 4,
+      "timeout_sec": 600
+    },
+    {
+      "name": "evaluate_factors",
+      "description": "重新计算因子评估快照",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 2,
+      "timeout_sec": 2400
+    },
+    {
+      "name": "run_factor_factory",
+      "description": "运行 AI 因子工厂，生成并验证 shadow 因子",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 3,
+      "timeout_sec": 180
+    },
+    {
+      "name": "run_strategy_factory",
+      "description": "运行 AI 策略工厂，回测并验证候选策略配置",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": true,
+      "max_per_day": 3,
+      "timeout_sec": 180
+    },
+    {
+      "name": "run_stock_screener",
+      "description": "运行全市场因子打分和 AI 复核选股",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": true,
+      "max_per_day": 6,
+      "timeout_sec": 240
+    },
+    {
+      "name": "generate_portfolio_plan",
+      "description": "运行 ultra thinking 多角色委员会并生成目标组合计划",
+      "risk": "medium",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": true,
+      "max_per_day": 6,
+      "timeout_sec": 240
+    },
+    {
+      "name": "verify_portfolio_plan",
+      "description": "验证 AI 目标组合权重和调仓计划是否满足硬风控",
+      "risk": "low",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 48,
+      "timeout_sec": 120
+    },
+    {
+      "name": "run_risk_monitor",
+      "description": "运行 L5 风控监控和自我验证",
+      "risk": "low",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 24,
+      "timeout_sec": 90
+    },
+    {
+      "name": "run_verifier",
+      "description": "运行统一自我验证器",
+      "risk": "low",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 48,
+      "timeout_sec": 120
+    },
+    {
+      "name": "paper_trade_once",
+      "description": "在模拟盘执行一次受控交易循环；若存在目标组合则按目标权重调仓",
+      "risk": "high",
+      "auto_allowed": true,
+      "requires_risk_pass": true,
+      "requires_data_fresh": true,
+      "max_per_day": 2,
+      "timeout_sec": 180
+    },
+    {
+      "name": "paper_rebalance_once",
+      "description": "按 AI 目标组合执行一次受控模拟盘调仓",
+      "risk": "high",
+      "auto_allowed": true,
+      "requires_risk_pass": true,
+      "requires_data_fresh": true,
+      "max_per_day": 2,
+      "timeout_sec": 180
+    },
+    {
+      "name": "memory_compact",
+      "description": "压缩 AI 经验记忆并刷新摘要",
+      "risk": "low",
+      "auto_allowed": true,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 4,
+      "timeout_sec": 60
+    },
+    {
+      "name": "self_improve_propose",
+      "description": "生成受控代码/策略改进提案，不直接修改生产代码",
+      "risk": "high",
+      "auto_allowed": false,
+      "requires_risk_pass": false,
+      "requires_data_fresh": false,
+      "max_per_day": 3,
+      "timeout_sec": 120
+    }
+  ],
+  "action_aliases": {
+    "run_daily_update": "refresh_data",
+    "evaluate_factor_ic": "evaluate_factors",
+    "review_signal_quality": "run_strategy_factory",
+    "review_critical_alerts": "run_risk_monitor",
+    "run_risk_monitor": "run_risk_monitor",
+    "run_self_verification": "run_verifier",
+    "run_stock_screener": "run_stock_screener",
+    "generate_portfolio_plan": "generate_portfolio_plan",
+    "verify_portfolio_plan": "verify_portfolio_plan",
+    "paper_trade_once": "paper_trade_once",
+    "paper_rebalance_once": "paper_rebalance_once",
+    "compact_memory": "memory_compact",
+    "self_improve_propose": "self_improve_propose"
+  }
+}

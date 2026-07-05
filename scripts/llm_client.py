@@ -240,6 +240,18 @@ def _record_usage_safe(provider: str, scene: str, usage, success: bool, model: s
         record_usage(provider, scene, usage, success=success, model=model)
     except Exception as e:
         logger.debug(f"record_usage skipped: {e}")
+    try:
+        from quant.data.audit import write_model_call
+        from quant.data.cache import create_cache
+        write_model_call(create_cache(), {
+            "provider": provider,
+            "scene": scene or "unknown",
+            "model": model,
+            "success": bool(success),
+            "usage": usage or {},
+        })
+    except Exception as e:
+        logger.debug(f"model_call audit skipped: {e}")
 
 
 # ── JSON 提取 ───────────────────────────────────────────────
@@ -249,8 +261,14 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
 _REASONING_MARKERS = [
     "分析请求", "分析数据", "分析输入", "理解任务", "理解请求",
     "草拟", "起草", "草稿", "draft",
-    "约束条件", "输出限制", "输出格式",
+    "约束条件", "输出限制", "输出格式", "格式化输出",
     "角色设定", "角色：",
+    "数据概览", "数据回顾", "回顾数据",
+    "风险考量", "风险评估",
+    "策略制定", "策略选择", "组合构建",
+    "验证检查", "最终确认",
+    "步骤", "思路", "思考过程",
+    "markdown", "反引号",
 ]
 
 
@@ -324,29 +342,113 @@ def strip_reasoning(text: str) -> str:
 
 
 def _extract_json(text: str):
-    """从 LLM 响应文本中提取 JSON 对象, 支持代码块和裸 JSON。"""
+    """从 LLM 响应文本中提取 JSON 对象, 支持代码块和裸 JSON。
+
+    针对 GLM-5.2 等推理模型的鲁棒处理:
+    - 推理过程可能包含 ```json 代码块示例, 需要取最后一个 (真正的输出)
+    - JSON 可能被 max_tokens 截断, 尝试修复不完整的尾部
+    """
     if not text:
         return None
-    # 1. 尝试 ```json ... ``` 代码块
-    m = _JSON_FENCE_RE.search(text)
-    if m:
-        try:
-            return json.loads(m.group(1).strip())
-        except (json.JSONDecodeError, ValueError):
-            pass
-    # 2. 尝试裸 JSON: 找第一个 { 到最后一个 }
-    first = text.find("{")
+    # 1. 尝试所有 ```json ... ``` 代码块, 取最后一个完整的
+    fences = _JSON_FENCE_RE.findall(text)
+    for fence in reversed(fences):
+        candidate = fence.strip()
+        parsed = _try_parse_json_lenient(candidate)
+        if parsed is not None:
+            return parsed
+    # 2. 尝试裸 JSON: 找最后一个 { 到最后一个 }
+    #    (推理模型可能在 JSON 前输出推理文字)
+    first = text.rfind("{")
     last = text.rfind("}")
     if first != -1 and last > first:
-        try:
-            return json.loads(text[first:last + 1])
-        except (json.JSONDecodeError, ValueError):
-            pass
-    # 3. 整体尝试
+        candidate = text[first:last + 1]
+        parsed = _try_parse_json_lenient(candidate)
+        if parsed is not None:
+            return parsed
+    # 3. 如果找到了 { 但没找到 }, 说明 JSON 被截断, 尝试修复
+    if first != -1 and last <= first:
+        candidate = _repair_truncated_json(text[first:])
+        if candidate:
+            parsed = _try_parse_json_lenient(candidate)
+            if parsed is not None:
+                return parsed
+    # 4. 整体尝试
+    return _try_parse_json_lenient(text.strip())
+
+
+def _try_parse_json_lenient(text: str):
+    """宽松 JSON 解析: 支持尾逗号、单引号、注释。"""
+    if not text:
+        return None
+    # 直接解析
     try:
-        return json.loads(text.strip())
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # 移除尾逗号 (JSON 不允许, 但 LLM 常加)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", text)
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # 移除单行注释 (// ...)
+    cleaned = re.sub(r"//[^\n]*", "", text)
+    try:
+        return json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _repair_truncated_json(text: str) -> str:
+    """尝试修复被 max_tokens 截断的 JSON。
+
+    策略: 从末尾往前找到最后一个完整的 }, 补齐缺少的 ] 和 }
+    """
+    if not text or "{" not in text:
+        return ""
+    # 找到最后一个完整的值/键位置
+    # 简单策略: 统计未闭合的 { 和 [, 补齐
+    open_braces = 0
+    open_brackets = 0
+    in_string = False
+    escape = False
+    last_complete_pos = 0
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            open_braces += 1
+        elif ch == "}":
+            open_braces -= 1
+            if open_braces >= 0 and open_brackets == 0:
+                last_complete_pos = i
+        elif ch == "[":
+            open_brackets += 1
+        elif ch == "]":
+            open_brackets -= 1
+    # 截到最后一个可能的完整位置, 然后补齐
+    # 先尝试去掉最后一个不完整的键值对 (如果有逗号或冒号没值)
+    cut = text
+    # 去掉末尾的不完整片段: 找最后一个逗号/引号位置
+    for marker in ['",', '", ', "',", "}", "]", "{\"", "\""]:
+        pos = cut.rfind(marker)
+        if pos > len(cut) * 0.5:  # 只在后半段找
+            candidate = cut[:pos + len(marker)]
+            # 补齐
+            candidate += "]" * max(0, open_brackets) + "}" * max(0, open_braces)
+            return candidate
+    # fallback: 直接补齐
+    return text.rstrip().rstrip(",") + "]" * max(0, open_brackets) + "}" * max(0, open_braces)
 
 
 def chat_json(provider: str, system: str, user: str, **kwargs) -> dict:

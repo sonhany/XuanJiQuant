@@ -56,12 +56,18 @@ def check_pre_trade() -> dict:
     # 硬规则 (仅数据 + 告警, 不依赖 operator)
     trade_allowed = True
     block_reasons = []
+    objective = cache.get("ai:objective:latest") or {}
+    objective_pressure = objective.get("objective_pressure")
+    risk_mode = objective.get("risk_mode")
     if data_stale:
         trade_allowed = False
         block_reasons.append("数据过期: K线不是最新交易日")
     if len(critical) > 0:
         trade_allowed = False
         block_reasons.append(f"存在{len(critical)}条严重告警")
+    if risk_mode == "no_new_position":
+        trade_allowed = False
+        block_reasons.append("目标周期已结束或目标风控要求禁止新开仓")
 
     # operator 策略仅作信息展示, 不参与硬门阻断 (避免循环依赖)
     operator = cache.get("ai:operator:latest") or {}
@@ -75,6 +81,9 @@ def check_pre_trade() -> dict:
         "critical_alerts": len(critical),
         "active_alerts": len(active),
         "operator_policy": operator_policy,  # 仅供参考, 不阻断
+        "objective_pressure": objective_pressure,
+        "objective_risk_mode": risk_mode,
+        "objective_progress_pct": objective.get("progress_pct"),
         "checked_at": _now(),
     }
 

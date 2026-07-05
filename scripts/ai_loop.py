@@ -27,9 +27,11 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from quant.ai.contracts import normalize_ai_decision
+from quant.data.audit import write_ai_decision
 from quant.data.cache import create_cache
 
 cache = create_cache()
@@ -74,7 +76,14 @@ def acquire_loop_lock(source: str = "manual") -> bool:
     """抢占闭环锁。避免 scheduler daemon、run_once、手动闭环并发跑五层。"""
     conn = _lock_conn()
     if conn is None:
-        return True
+        try:
+            holder = cache.get(LOOP_LOCK_KEY) or {}
+            if holder and time.time() - float(holder.get("ts", 0) or 0) < LOOP_LOCK_TTL:
+                return False
+            cache.set(LOOP_LOCK_KEY, {"pid": os.getpid(), "source": source, "time": _now(), "ts": time.time()}, ttl=LOOP_LOCK_TTL)
+            return True
+        except Exception:
+            return False
     now_ts = time.time()
     data = json.dumps({"pid": os.getpid(), "source": source, "time": _now(), "ts": now_ts}, ensure_ascii=False)
     try:
@@ -87,13 +96,19 @@ def acquire_loop_lock(source: str = "manual") -> bool:
         conn.commit()
         return cur.rowcount == 1
     except Exception:
-        return True
+        return False
 
 
 def release_loop_lock():
     """释放当前进程持有的闭环锁。"""
     conn = _lock_conn()
     if conn is None:
+        try:
+            holder = cache.get(LOOP_LOCK_KEY) or {}
+            if isinstance(holder, dict) and holder.get("pid") == os.getpid():
+                cache.delete(LOOP_LOCK_KEY)
+        except Exception:
+            pass
         return
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
@@ -238,7 +253,9 @@ def run_loop(provider: str = "glm", trigger_paper: bool = False, source: str = "
             operator = run_operator(provider)
             results["steps"]["operator"] = {
                 "trade_policy": operator.get("trade_policy"),
-                "actions": len(operator.get("actions", [])),
+                "paper_trade_allowed": bool(operator.get("paper_trade_allowed", False)),
+                "actions": operator.get("actions", []),
+                "action_count": len(operator.get("actions", [])),
                 "summary": (operator.get("summary") or "")[:200],
             }
             _log_step("AI总控汇总", "done", f"policy={operator.get('trade_policy')}")
@@ -246,78 +263,233 @@ def run_loop(provider: str = "glm", trigger_paper: bool = False, source: str = "
             results["errors"].append(f"AI总控失败: {e}")
             _log_step("AI总控汇总", "error", str(e)[:80])
 
+        # ── Step 6.5: 全市场 AI 选股 ─────────────────
+        # 用 IC 加权打分 + GLM 复核, 从全市场筛出 Top 候选股。
+        # 失败静默降级 (返回空池), 不阻断闭环; 仅在重巡检触发, 盘中轻量巡检不跑。
+        candidate_pool = []
+        _log_step("全市场选股", "running", "因子打分+AI复核...")
+        try:
+            from scripts.ai_stock_screener import screen_market
+            screened = screen_market(top_n=20, provider=provider)
+            candidate_pool = [s["code"] for s in screened.get("top", [])]
+            results["steps"]["screen"] = {
+                "candidates": len(candidate_pool),
+                "stats": screened.get("stats", {}),
+            }
+            _log_step("全市场选股", "done", f"选出 {len(candidate_pool)} 只候选")
+        except Exception as e:
+            results["errors"].append(f"全市场选股失败: {str(e)[:120]}")
+            _log_step("全市场选股", "error", str(e)[:80])
+
+        # ── Step 6.6: candidate_pool 持久化为动态选股池 ─────
+        # 把选出的 Top 代码并入 paper:config.universe (只增不减 + 上限50)
+        # 解决断点 G: 让 paper_trader daemon 兜底路径也能拿到选股结果
+        if candidate_pool:
+            try:
+                _cfg = cache.get("paper:config") or {}
+                old_universe = set(str(c) for c in (_cfg.get("universe") or []))
+                new_universe = list(old_universe | set(candidate_pool))[:50]
+                if len(new_universe) != len(old_universe):
+                    _cfg["universe"] = new_universe
+                    cache.set("paper:config", _cfg)
+                    _log_step("全市场选股", "done", f"universe 更新为 {len(new_universe)} 只")
+            except Exception as e:
+                _log_step("全市场选股", "error", f"universe 持久化失败: {str(e)[:60]}")
+
+        # ── Step 6.7: 全局目标组合规划 ─────────────────
+        objective_status = None
+        portfolio_plan = None
+        autonomous_cfg = {}
+        try:
+            from scripts.ai_objective import compute_objective_status, load_autonomous_config
+            autonomous_cfg = load_autonomous_config()
+            objective_status = compute_objective_status(autonomous_cfg)
+            results["steps"]["objective"] = {
+                "target_equity": objective_status.get("target_equity"),
+                "current_equity": objective_status.get("current_equity"),
+                "progress_pct": objective_status.get("progress_pct"),
+                "risk_mode": objective_status.get("risk_mode"),
+                "pressure": objective_status.get("objective_pressure"),
+            }
+            _log_step("目标进度", "done", f"进度{objective_status.get('progress_pct', 0):.2f}% 需年化{objective_status.get('required_annualized_return_pct', 0):.1f}%")
+            if autonomous_cfg.get("enabled") and autonomous_cfg.get("mode") == "target_portfolio":
+                _log_step("目标组合委员会", "running", "多角色委员会生成目标权重...")
+                from scripts.ai_portfolio_planner import run_portfolio_committee
+                portfolio_plan = run_portfolio_committee(provider, candidate_pool=candidate_pool, objective=objective_status, loop_results=results)
+                results["steps"]["portfolio"] = {
+                    "trade_policy": portfolio_plan.get("trade_policy"),
+                    "targets": len(portfolio_plan.get("target_weights", [])),
+                    "cash_target_pct": portfolio_plan.get("cash_target_pct"),
+                    "summary": (portfolio_plan.get("summary") or "")[:200],
+                }
+                _log_step("目标组合委员会", "done", f"目标{len(portfolio_plan.get('target_weights', []))}只 policy={portfolio_plan.get('trade_policy')}")
+        except Exception as e:
+            results["errors"].append(f"目标组合规划失败: {str(e)[:160]}")
+            _log_step("目标组合委员会", "error", str(e)[:80])
+
         # ── Step 7: 综合判断 ─────────────────────────
-        global_policy = results["steps"].get("global", {}).get("trade_policy", "normal")
+        global_ok = "global" in results["steps"]
+        global_policy = results["steps"].get("global", {}).get("trade_policy", "reduce_only")
         data_ok = not results["steps"].get("L1_data", {}).get("data_stale", True)
         risk_ok = results["steps"].get("L5_risk", {}).get("trade_allowed", False)
-        operator_policy = results["steps"].get("operator", {}).get("trade_policy", "no_new_position")
+        operator_step = results["steps"].get("operator", {})
+        operator_policy = operator_step.get("trade_policy", "no_new_position")
+        operator_allowed = bool(operator_step.get("paper_trade_allowed", False))
 
-        # 最保守策略胜出
+        # 最保守策略胜出。Operator 的显式禁止交易也必须进入最终门禁。
+        portfolio_policy = (portfolio_plan or {}).get("trade_policy")
         policies = [global_policy, operator_policy]
+        if portfolio_policy:
+            policies.append(portfolio_policy)
+        if objective_status and objective_status.get("risk_mode") == "no_new_position":
+            policies.append("no_new_position")
+        if not global_ok:
+            policies.append("reduce_only")
         if not data_ok:
             policies.append("no_new_position")
         if not risk_ok:
             policies.append("no_new_position")
+        if not operator_allowed:
+            policies.append("no_new_position")
         priority = {"normal": 0, "reduce_only": 1, "no_new_position": 2}
         final_policy = max(policies, key=lambda p: priority.get(p, 2))
-        final_trade_allowed = final_policy == "normal" and data_ok and risk_ok
+        final_trade_allowed = final_policy == "normal" and data_ok and risk_ok and operator_allowed
 
         results["final"] = {
             "trade_allowed": final_trade_allowed,
             "trade_policy": final_policy,
             "data_ok": data_ok,
             "risk_ok": risk_ok,
+            "operator_allowed": operator_allowed,
+            "global_ok": global_ok,
             "global_risk": results["steps"].get("global", {}).get("risk_level"),
+            "portfolio_policy": portfolio_policy,
+            "objective_pressure": (objective_status or {}).get("objective_pressure"),
         }
 
         # ── 写入决策层统一输出 ai:decision:latest (供执行层读取) ────
         # paper_trader 执行时读这个键, 避免决策层和执行层各判断各的。
         global_ctx = results["steps"].get("global", {})
         operator_plan = results["steps"].get("operator", {})
-        cache.set("ai:decision:latest", {
+        decision_payload = {
             "trade_policy": final_policy,
             "trade_allowed": final_trade_allowed,
             "risk_level": global_ctx.get("risk_level", "low"),
             "global_risk_signals": global_ctx.get("risk_signals", []),
             "operator_summary": operator_plan.get("summary", ""),
             "operator_actions": operator_plan.get("actions", []),
+            "operator_allowed": operator_allowed,
+            "candidate_pool": candidate_pool,
+            "target_weights": [],
+            "rebalance_plan": [],
             "data_ok": data_ok,
             "risk_ok": risk_ok,
             "generated_at": _now(),
+            "valid_until": (datetime.now() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S"),
             "date": _today(),
             "source": source,
-        })
-
-        # ── Step 8: 经验沉淀 ─────────────────────────
-        try:
-            lessons = cache.get("ai:memory:lessons") or []
-            lessons.append({
-                "date": _today(),
-                "type": "ai_loop",
-                "content": f"闭环完成: policy={final_policy} data_ok={data_ok} risk_ok={risk_ok} errors={len(results['errors'])}",
+            "risk_budget": {
+                "max_position_pct": ((autonomous_cfg.get("risk") or {}).get("max_position_pct", 0.2)),
+                "max_gross_exposure_pct": ((autonomous_cfg.get("risk") or {}).get("max_gross_exposure_pct", 95)),
+                "max_position_count": ((autonomous_cfg.get("risk") or {}).get("max_position_count", 10)),
+                "max_daily_turnover_pct": ((autonomous_cfg.get("risk") or {}).get("max_daily_turnover_pct", 35)),
+            },
+            "confidence": 0.8 if final_trade_allowed else 0.45,
+            "model_version": provider,
+            "prompt_version": "ai_loop.v1",
+            "reason_codes": [
+                f"policy:{final_policy}",
+                f"data_ok:{data_ok}",
+                f"risk_ok:{risk_ok}",
+                f"operator_allowed:{operator_allowed}",
+            ],
+        }
+        if objective_status:
+            decision_payload["objective"] = objective_status
+        if portfolio_plan:
+            decision_payload.update({
+                "portfolio_plan_id": portfolio_plan.get("plan_id"),
+                "target_weights": portfolio_plan.get("target_weights", []),
+                "rebalance_plan": portfolio_plan.get("rebalance_plan", []),
+                "cash_target_pct": portfolio_plan.get("cash_target_pct"),
+                "committee_summary": portfolio_plan.get("committee_summary", []),
+                "portfolio_summary": portfolio_plan.get("summary", ""),
             })
-            lessons = lessons[-50:]
-            cache.set("ai:memory:lessons", lessons)
-            results["total_lessons"] = len(lessons)
+        decision_payload = normalize_ai_decision(decision_payload)
+        cache.set("ai:decision:latest", decision_payload)
+        try:
+            write_ai_decision(cache, decision_payload, source="ai_loop")
         except Exception:
             pass
 
-        # ── Step 9: (可选) 触发模拟盘交易 ─────────────
-        if trigger_paper and final_trade_allowed:
-            paper_source = "scheduler" if source == "scheduler" else "ai_loop"
-            _log_step("触发交易", "running", "调用 paper_trader --once...")
+        # ── Step 7.5: 统一自我验证 ───────────────────
+        _log_step("自我验证", "running", "校验决策一致性+工具白名单...")
+        verifier = None
+        verifier_ok = False
+        try:
+            from scripts.ai_verifier import run_verifier
+            verifier = run_verifier("quick")
+            verifier_ok = verifier.get("overall") == "pass"
+            results["steps"]["verifier"] = {
+                "overall": verifier.get("overall"),
+                "failed": verifier.get("failed", []),
+                "checks": len(verifier.get("checks", [])),
+            }
+            _log_step("自我验证", "done" if verifier_ok else "error", f"overall={verifier.get('overall')}")
+        except Exception as e:
+            results["errors"].append(f"自我验证失败: {e}")
+            verifier = {"success": False, "overall": "fail", "date": _today(), "generated_at": _now(), "failed": ["verifier_exception"], "error": str(e)[:200]}
+            cache.set("ai:verifier:latest", verifier)
+            results["steps"]["verifier"] = {"overall": "fail", "failed": ["verifier_exception"], "checks": 0}
+            _log_step("自我验证", "error", str(e)[:80])
+
+        # 本轮 verifier 必须通过才允许后续高风险工具。失败时同步收紧统一决策输出。
+        decision_after_verify = cache.get("ai:decision:latest") or {}
+        decision_after_verify["verifier_ok"] = verifier_ok
+        if not verifier_ok:
+            decision_after_verify["trade_allowed"] = False
+            decision_after_verify["trade_policy"] = "no_new_position"
+            decision_after_verify.setdefault("reason_codes", []).append("verifier_failed")
+            results["final"]["trade_allowed"] = False
+        decision_after_verify = normalize_ai_decision(decision_after_verify)
+        cache.set("ai:decision:latest", decision_after_verify)
+        try:
+            write_ai_decision(cache, decision_after_verify, source="ai_loop_verifier")
+        except Exception:
+            pass
+
+        # ── Step 8: 经验沉淀 ─────────────────────────
+        try:
+            from scripts.ai_memory import append_memory, summarize_memory
+            mem = append_memory(
+                "ai_loop",
+                f"闭环完成: policy={final_policy} data_ok={data_ok} risk_ok={risk_ok} verifier={(verifier or {}).get('overall')} errors={len(results['errors'])}",
+                source="ai_loop",
+                importance="high" if results["errors"] or (verifier and verifier.get("overall") != "pass") else "medium",
+                meta={"source": source, "final": results.get("final"), "verifier_failed": (verifier or {}).get("failed", [])},
+            )
+            summary = summarize_memory()
+            results["memory"] = {"total": mem.get("stats", {}).get("total"), "summary_at": summary.get("generated_at")}
+        except Exception:
+            pass
+
+        # ── Step 9: (可选) 通过工具执行器触发模拟盘交易 ─────────────
+        if trigger_paper and results["final"].get("trade_allowed") and verifier_ok:
+            _log_step("工具执行器", "running", "白名单触发 paper_trade_once...")
             try:
-                import subprocess
-                subprocess.run(
-                    [sys.executable, os.path.join(os.path.dirname(__file__), "paper_trader.py"), "--once", "--source", paper_source],
-                    cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    timeout=120, capture_output=True,
-                )
-                _log_step("触发交易", "done", f"paper_trader 已执行 source={paper_source}")
+                from scripts.ai_action_executor import run_executor
+                executor = run_executor(source=source, allowed_tools=["paper_trade_once"], dry_run=False, provider=provider)
+                results["steps"]["tool_executor"] = {
+                    "status": executor.get("status"),
+                    "actions": len(executor.get("actions", [])),
+                    "success": executor.get("success"),
+                }
+                _log_step("工具执行器", "done" if executor.get("success") else "error", f"actions={len(executor.get('actions', []))}")
             except Exception as e:
-                _log_step("触发交易", "error", str(e)[:80])
+                results["errors"].append(f"工具执行器失败: {e}")
+                _log_step("工具执行器", "error", str(e)[:80])
         else:
-            _log_step("触发交易", "skip", f"policy={final_policy}, 不触发交易")
+            _log_step("工具执行器", "skip", f"policy={final_policy}, 不触发交易")
 
         results["finished_at"] = _now()
         results["progress"] = cache.get("ai:loop:progress") or []

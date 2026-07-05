@@ -1,68 +1,81 @@
-# 依赖文件
+# Frontend dependencies / build
 node_modules/
+dist/
+build/
+.cache/
+.vite/
+node_modules/.vite/
+node_modules/.vite-temp/
+
+# Playwright / browser verification artifacts
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Runtime logs
+logs/
+*.log
+server/*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
 
-# 构建输出
-dist/
-build/
-.vercel/
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 数据库与运行时数据（首次 seed 后生成，勿提交）
+# Runtime data (generated locally)
 data/*.db
 data/*.db-wal
 data/*.db-shm
-data/qlib_data/
-data/cache/
-# data 目录下的运行产物（日志/快照/评估结果/进度），由程序运行生成
-data/*.log
+data/*.sqlite
+data/*.sqlite3
 data/*.pkl
-data/*.json
+data/*.pickle
+data/*.log
 data/*.txt
 data/download_progress.json
 data/factor_evaluation*.json
+data/strategy_scan*.json
+data/cache/
+data/qlib_data/
 
-# 归档目录
-archive/
-
-# 环境变量文件（包含敏感信息）
+# Environment files with secrets
 .env
 .env.local
 .env.production
 .env.development
 
-# IDE 配置
+# Local screenshots / verification images
+*.png
+screenshots/
+!docs/**/*.png
+!README.assets/**/*.png
+!AI自主架构流程图/**/*.png
+
+# Local audit artifacts
+audit_results.json
+audit_results.md
+audit_script.mjs
+
+# Local archives / workspace dumps
+archive/
+
+# WorkBuddy agent workspace (local only, never commit)
+.workbuddy/
+
+# IDE / OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# 操作系统文件
 .DS_Store
 Thumbs.db
 
-# 临时文件
-*.log
-.cache/
-
-# Claude Code
-.claude/
-
-# Playwright MCP 运行产物
-.playwright-mcp/
-
-# 运行日志目录
-logs/
-
-# 临时审计产物
-audit_results.json
-audit_results.md
-audit_script.mjs
-
-# Windows 保留文件名
+# Windows accidental reserved-name file
 nul
-*.png
-playwright_shot.png

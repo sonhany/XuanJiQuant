@@ -26,14 +26,16 @@ runner.ensure();
 // 可路由到 runner 的 action 集合 (高频只读, 纯缓存读取, 不需要 Node 内存态);
 // status / ai_scheduler_status 需要 daemonMeta() (Node 内存), 不走 runner
 const RUNNER_ACTIONS = new Set([
-  'progress', 'log', 'ai_all_status', 'ai_operator_status',
-  'ai_loop_status', 'watchdog_status', 'llm_usage',
+  'progress', 'log', 'ai_all_status', 'ai_screen_status',
+  'ai_autonomous_status', 'ai_autonomous_get_config',
+  'ai_operator_status',
+  'ai_loop_status', 'ai_memory_status', 'ai_verifier_status',
+  'ai_tool_executor_status', 'ai_updates_status',
+  'watchdog_status', 'llm_usage',
   'global_context_status', 'report', 'get_config', 'benchmark',
 ]);
 
-// ─── 模块加载时自愈: 清理孤儿状态 ────────────────────
-// 后端重启后, 内存里 daemonProc 必为 null, 不可能有 daemon 在跑。
-// 若 SQLite 里 status.running=true, 说明是上个后端实例遗留的孤儿状态, 强制纠正。
+// ─── 模块加载时自愈: 只清理确认已死亡的旧 pid 状态 ─────────────
 function selfHealOrphanStatus() {
   try {
     spawnSync(PYTHON, ['-c', `
@@ -42,8 +44,10 @@ sys.path.insert(0, '.')
 from quant.data.cache import create_cache
 c = create_cache()
 s = c.get('paper:status') or {}
-if s.get('running'):
+# 只清理没有 pid 的旧 running 状态；有 pid 的状态由 paper_manager 的跨进程检查处理。
+if s.get('running') and not s.get('pid'):
     s['running'] = False
+    s['orphan_checked'] = True
     c.set('paper:status', s)
     print('HEALED')
 `], { cwd: ROOT_DIR, env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' }, windowsHide: true, timeout: 8000, encoding: 'utf-8' });
@@ -52,6 +56,7 @@ if s.get('running'):
   }
 }
 selfHealOrphanStatus();
+
 
 /** 同步跑一段 Python, 返回 JSON 或 {_error}。 */
 function runPython(code, timeout = 60_000) {
@@ -78,16 +83,17 @@ function readPaperKeys() {
 import sys, json
 sys.path.insert(0, '.')
 from quant.data.cache import create_cache
+from scripts.paper_runner import _paper_config
 c = create_cache()
 print(json.dumps({
-  'config': c.get('paper:config'),
+  'config': _paper_config(c),
   'status': c.get('paper:status'),
   'log': c.get('paper:log') or [],
 }, ensure_ascii=False, default=str))
 `);
 }
 
-export async function handlePaper(req, res) {
+export async function handlePaper(req, res, ctx = {}) {
   let body = {};
   try {
     body = req.method === 'POST' ? await readBody(req) : {};
@@ -95,6 +101,9 @@ export async function handlePaper(req, res) {
     body = {};
   }
   const action = body.action || 'status';
+  if (ctx.authorize && !ctx.authorize(req, body)) {
+    return json(res, 403, { success: false, error: '控制面请求未授权或非本机来源' });
+  }
 
   try {
     // ─── 高频只读 action 走持久化 Python 进程 (省 ~280ms 启动开销) ───
@@ -122,7 +131,7 @@ export async function handlePaper(req, res) {
       return json(res, 200, {
         success: true,
         data: {
-          daemon: { ...meta, running, started_at: meta.started_at || dbStatus.get?.('started_at') },
+          daemon: { ...meta, running, started_at: meta.started_at || dbStatus.started_at },
           config: keys.config,
           status: dbStatus,
         },
@@ -509,6 +518,98 @@ print(json.dumps({'success': True, 'data': get_status()}, ensure_ascii=False, de
       return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
     }
 
+    // ─── 全局 AI 自主控制配置 ─────────────────────
+    if (action === 'ai_autonomous_status' || action === 'ai_autonomous_get_config') {
+      const r = runPython(`
+import sys, json
+sys.path.insert(0, '.')
+from scripts.ai_objective import get_status, load_autonomous_config, compute_objective_status
+if '${action}' == 'ai_autonomous_get_config':
+    out = load_autonomous_config()
+else:
+    out = get_status()
+    out['objective'] = compute_objective_status()
+print(json.dumps({'success': True, 'data': out}, ensure_ascii=False, default=str))
+`, 10000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
+    }
+
+    if (action === 'ai_autonomous_set_config') {
+      const cfg = body.config || {};
+      const cfgB64 = Buffer.from(JSON.stringify(cfg)).toString('base64');
+      const r = runPython(`
+import sys, json, base64
+sys.path.insert(0, '.')
+from scripts.ai_objective import save_autonomous_config, compute_objective_status
+patch = json.loads(base64.b64decode('${cfgB64}').decode('utf-8'))
+cfg = save_autonomous_config(patch)
+obj = compute_objective_status(cfg)
+print(json.dumps({'success': True, 'config': cfg, 'objective': obj}, ensure_ascii=False, default=str))
+`, 10000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: { config: r.config, objective: r.objective }, message: '全局 AI 自主配置已保存' });
+    }
+
+    if (action === 'ai_autonomous_start') {
+      const cfg = body.config || {};
+      if (Object.keys(cfg).length) {
+        const cfgB64 = Buffer.from(JSON.stringify(cfg)).toString('base64');
+        runPython(`
+import sys, json, base64
+sys.path.insert(0, '.')
+from scripts.ai_objective import save_autonomous_config
+save_autonomous_config(json.loads(base64.b64decode('${cfgB64}').decode('utf-8')))
+print(json.dumps({'ok': True}))
+`, 10000);
+      }
+      const r = startAIScheduler(body.provider || cfg.provider || null);
+      return json(res, r.success ? 200 : 409, r);
+    }
+
+    if (action === 'ai_autonomous_stop') {
+      const r = stopAIScheduler();
+      return json(res, r.success ? 200 : 404, r);
+    }
+
+    if (action === 'ai_autonomous_run_once') {
+      const meta = aiSchedulerMeta();
+      if (meta.running) {
+        return json(res, 409, { success: false, error: 'AI 调度器 daemon 正在运行, 请等待自动巡检或先停止 daemon' });
+      }
+      log('INFO', '[AIScheduler] autonomous run_once triggered');
+      const child = spawn(process.env.PYTHON || 'python', [`${ROOT_DIR}/scripts/ai_scheduler.py`, '--once'], {
+        cwd: ROOT_DIR,
+        env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' },
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      runPython(`
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('ai:scheduler:latest') or {}
+s['run_once_pid'] = ${child.pid || 0}
+s['run_once_started_at'] = '${new Date().toISOString()}'
+s['run_once_running'] = True
+c.set('ai:scheduler:latest', s)
+`, 5000);
+      child.on('exit', (code) => {
+        runPython(`
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('ai:scheduler:latest') or {}
+s['run_once_running'] = False
+s['running'] = False
+s['run_once_exit_code'] = ${Number.isFinite(code) ? code : -1}
+s['run_once_finished_at'] = '${new Date().toISOString()}'
+c.set('ai:scheduler:latest', s)
+`, 5000);
+      });
+      return json(res, 200, { success: true, started: true, pid: child.pid, message: '已后台触发一轮全局 AI 自主巡检' });
+    }
+
     // ─── AI 自主调度器 (daemon 启停 + 状态) ─────────────
     // ai_loop_start/stop 为历史兼容别名；真实语义是启动/停止 ai_scheduler.py。
     if (action === 'ai_scheduler_start' || action === 'ai_loop_start') {
@@ -529,21 +630,96 @@ from scripts.ai_scheduler import get_status
 print(json.dumps({'success': True, 'data': get_status()}, ensure_ascii=False, default=str))
 `, 8000);
       const data = r._error ? {} : (r.data || {});
-      // 内存存活状态以 ai_loop_manager 为准 (跨进程真实存活)
-      data.daemon_running = meta.running;
-      data.daemon_pid = meta.pid;
+      const cachedPid = data.pid;
+      let cachedAlive = false;
+      if (cachedPid) {
+        try { process.kill(Number(cachedPid), 0); cachedAlive = true; } catch { cachedAlive = false; }
+      }
+      data.daemon_running = meta.running || cachedAlive;
+      data.daemon_pid = meta.pid || (cachedAlive ? cachedPid : null);
       return json(res, 200, { success: true, data });
     }
+
+    if (action === 'ai_verifier_run') {
+      const mode = body.mode === 'full' ? 'full' : 'quick';
+      const r = runPython(`
+import sys, json
+sys.path.insert(0, '.')
+from scripts.ai_verifier import run_verifier
+print(json.dumps({'success': True, 'data': run_verifier('${mode}')}, ensure_ascii=False, default=str))
+`, mode === 'full' ? 180000 : 60000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
+    }
+
+    if (action === 'ai_tool_executor_run') {
+      const dryRun = body.dry_run !== false ? 'True' : 'False';
+      const providerArg = JSON.stringify(body.provider || 'glm');
+      const r = runPython(`
+import sys, json
+sys.path.insert(0, '.')
+from scripts.ai_action_executor import run_executor
+out = run_executor(source='manual', allowed_tools=None, dry_run=${dryRun}, provider=${providerArg})
+print(json.dumps({'success': True, 'data': out}, ensure_ascii=False, default=str))
+`, 180000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
+    }
+
+    if (action === 'ai_self_improve_propose') {
+      const providerArg = body.provider ? JSON.stringify(body.provider) : 'None';
+      const r = runPython(`
+import sys, json
+sys.path.insert(0, '.')
+from scripts.ai_self_improver import propose_update
+out = propose_update(${providerArg})
+print(json.dumps({'success': True, 'data': out}, ensure_ascii=False, default=str))
+`, 60000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
+    }
+
     // 立即跑当前时段对应的一轮 (非阻塞触发)
     if (action === 'ai_scheduler_run_once') {
+      const meta = aiSchedulerMeta();
+      if (meta.running) {
+        return json(res, 409, { success: false, error: 'AI 调度器 daemon 正在运行, 请等待自动巡检或先停止 daemon' });
+      }
       log('INFO', '[AIScheduler] run_once triggered');
-      spawn(process.env.PYTHON || 'python', [`${ROOT_DIR}/scripts/ai_scheduler.py`, '--once'], {
+      const child = spawn(process.env.PYTHON || 'python', [`${ROOT_DIR}/scripts/ai_scheduler.py`, '--once'], {
         cwd: ROOT_DIR,
         env: { ...process.env, QUANT_SKIP_NODE_PROXY: '1', PYTHONIOENCODING: 'utf-8' },
         windowsHide: true,
-        stdio: 'ignore',
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
-      return json(res, 200, { success: true, started: true, message: '已后台触发一轮巡检' });
+      runPython(`
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('ai:scheduler:latest') or {}
+s['run_once_pid'] = ${child.pid || 0}
+s['run_once_started_at'] = '${new Date().toISOString()}'
+s['run_once_running'] = True
+c.set('ai:scheduler:latest', s)
+`, 5000);
+      let stderrBuf = '';
+      child.stderr?.setEncoding('utf-8');
+      child.stderr?.on('data', d => { stderrBuf += String(d); });
+      child.on('exit', (code) => {
+        const err = stderrBuf.slice(-500).replace(/'/g, "\\'");
+        runPython(`
+import sys
+sys.path.insert(0, '.')
+from quant.data.cache import create_cache
+c = create_cache()
+s = c.get('ai:scheduler:latest') or {}
+s['run_once_running'] = False
+s['running'] = False
+s['run_once_exit_code'] = ${Number.isFinite(code) ? code : -1}
+s['run_once_finished_at'] = '${new Date().toISOString()}'
+s['run_once_error'] = '${err}'
+c.set('ai:scheduler:latest', s)
+`, 5000);
+      });
+      return json(res, 200, { success: true, started: true, pid: child.pid, message: '已后台触发一轮巡检' });
     }
 
     // ─── 看门狗状态 (供驾驶舱读取) ─────────────────────
@@ -560,7 +736,7 @@ print(json.dumps({'success': True, 'data': c.get('ai:watchdog:latest') or {
       return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
     }
 
-    // ─── AI 全层状态聚合 (一次读全部5层+全球+闭环) ────
+    // ─── AI 全层状态聚合 (一次读全部5层+全球+闭环+选股+决策) ────
     if (action === 'ai_all_status') {
       const r = runPython(`
 import sys, json
@@ -577,9 +753,29 @@ out = {
   'operator': c.get('ai:operator:latest'),
   'loop': {'latest': c.get('ai:loop:latest'), 'progress': c.get('ai:loop:progress') or []},
   'lessons': (c.get('ai:memory:lessons') or [])[-5:],
+  'memory': {'stats': c.get('ai:memory:stats'), 'summary': c.get('ai:memory:summary'), 'recent': (c.get('ai:memory:lessons') or [])[-10:]},
+  'verifier': c.get('ai:verifier:latest'),
+  'tool_executor': c.get('ai:tool_executor:latest'),
+  'updates': c.get('ai:updates:latest'),
+  'decision': c.get('ai:decision:latest'),
+  'screen': c.get('ai:screen:latest'),
 }
 print(json.dumps({'success': True, 'data': out}, ensure_ascii=False, default=str))
 `, 15000);
+      return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
+    }
+
+    // ─── 全市场选股 (手动触发 / 读结果) ─────────────
+    if (action === 'ai_screen_run') {
+      const providerArg = JSON.stringify(body.provider || 'glm');
+      const topArg = Math.max(1, Math.min(100, parseInt(body.top_n || 20, 10) || 20));
+      const r = runPython(`
+import sys, json
+sys.path.insert(0, '.')
+from scripts.ai_stock_screener import screen_market
+out = screen_market(top_n=${topArg}, provider=${providerArg})
+print(json.dumps({'success': True, 'data': out}, ensure_ascii=False, default=str))
+`, 200000);
       return json(res, r._error ? 500 : 200, r._error ? r : { success: true, data: r.data });
     }
 

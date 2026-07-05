@@ -12,6 +12,7 @@ from typing import Optional, Dict, List, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from quant.data.cache import create_cache
+from quant.data.audit import write_order_event, write_trade_event
 from quant.backtest.engine import is_limit_bar
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -168,6 +169,10 @@ def _reject(order: Optional[dict], reason: str, message: str, s: Optional[dict] 
         order["filled_at"] = _now()
         if s is not None:
             _save_state(s)
+        try:
+            write_order_event(cache, order, source="execution_reject")
+        except Exception:
+            pass
     return {"success": False, "error": message, "reason": reason, "data": {"order": order} if order else None}
 
 
@@ -279,6 +284,7 @@ def _do_fill(order_id: str, code: str, direction: str, fill_qty: int,
 
     trade = {
         "id": _next_id("T", s),
+        "order_id": order_id,
         "code": code, "direction": direction,
         "quantity": fill_qty, "price": round(fill_price, 2),
         "timestamp": _now(),
@@ -287,9 +293,25 @@ def _do_fill(order_id: str, code: str, direction: str, fill_qty: int,
         "price_source": price_source,
         **fees,
     }
-    s["trades"].append(trade)
-
     order = next((o for o in s["orders"] if o["id"] == order_id), None)
+    if order:
+        trade["run_id"] = order.get("run_id")
+        trade["decision_id"] = order.get("decision_id")
+    s["trades"].append(trade)
+    try:
+        write_trade_event(cache, trade, source="execution_fill")
+    except Exception:
+        pass
+
+    # 建仓 (新建持仓) 自动设默认 trailing 止损, 不再依赖外部手动调用 set_stop_loss
+    # 接通孤岛: 原 _do_fill 买入后从不设止损, 导致 trailing 检测永远不生效
+    if direction == "buy" and s["positions"].get(code, {}).get("quantity") == fill_qty:
+        # 仅新建仓时设 (加仓不覆盖已有止损线, 避免抬高止损)
+        stops = _load_stops()
+        if code not in stops or not stops[code].get("trailing_pct"):
+            stops[code] = {"trailing_pct": 8.0, "highest_price": fill_price, "activated": False}
+            _save_stops(stops)
+
     if order:
         order["filled_qty"] += fill_qty
         order["filled_price"] = fill_price
@@ -298,6 +320,10 @@ def _do_fill(order_id: str, code: str, direction: str, fill_qty: int,
         order["price_source"] = price_source
         order["notional"] = round(notional, 2)
         order.update(fees)
+        try:
+            write_order_event(cache, order, source="execution_fill")
+        except Exception:
+            pass
 
     _save_state(s)
     return {"success": True, "data": {"order": order, "trade": trade}}
@@ -443,6 +469,9 @@ def action_place_order(req):
         "status": "pending",
         "filled_qty": 0, "filled_price": 0.0,
         "created_at": _now(), "filled_at": 0,
+        "source": req.get("source", "manual"),
+        "run_id": req.get("run_id"),
+        "decision_id": req.get("decision_id"),
     }
     s["orders"].append(order)
     _save_state(s)
@@ -472,8 +501,30 @@ def action_fill_order(req):
     order = next((o for o in s["orders"] if o["id"] == req["order_id"]), None)
     if not order:
         return {"success": False, "error": "订单不存在"}
+    if order.get("status") not in ("pending", "partial"):
+        return {
+            "success": False,
+            "error": f"order status {order.get('status')} cannot be filled",
+            "reason": "order_not_fillable",
+            "data": {"order": order},
+        }
     fill_price = float(req.get("fill_price", 0))
-    fill_qty = int(req.get("fill_qty") if req.get("fill_qty") else order["quantity"])
+    remaining_qty = int(order.get("quantity", 0)) - int(order.get("filled_qty", 0))
+    fill_qty = int(req.get("fill_qty") if req.get("fill_qty") else remaining_qty)
+    if fill_qty <= 0:
+        return {
+            "success": False,
+            "error": "no remaining quantity to fill",
+            "reason": "no_remaining_quantity",
+            "data": {"order": order},
+        }
+    if fill_qty > remaining_qty:
+        return {
+            "success": False,
+            "error": f"fill_qty {fill_qty} exceeds remaining quantity {remaining_qty}",
+            "reason": "fill_qty_exceeds_remaining",
+            "data": {"order": order},
+        }
     return _do_fill(order["id"], order["code"], order["direction"], fill_qty, fill_price, s)
 
 
@@ -592,12 +643,87 @@ def action_trades(req=None):
     return {"success": True, "data": trades}
 
 
+# ── 止盈止损自动检查 (接通孤岛) ───────────────────────────
+# 原 _refresh_position_prices 只检测 trailing 触发但不下单, 这里补上下单闭环。
+# 硬止损: 个股相对成本跌幅 <= -8% 直接全平 (不经 LLM, 不可被 AI 覆盖)。
+# 移动止盈: trailing_pct 回撤达阈值全平 (复用已有 trailing 检测)。
+HARD_STOP_PCT = -8.0  # 个股硬止损线 (%)
+
+
+def action_check_stops(req=None):
+    """检查所有持仓的止盈止损, 触发则自动下卖单全平。
+
+    被 ai_scheduler 盘中轻巡检调用 (每 10 分钟一次)。
+    硬规则: 不经过 LLM, 直接平仓, 是不可被 AI 覆盖的安全网。
+    """
+    s = _load_state()
+    triggered = _refresh_position_prices(s)  # 已有: trailing 检测 + 价格刷新
+
+    # 硬止损检测: 相对成本跌幅 <= -8%
+    extra = []
+    for code, pos in s["positions"].items():
+        price = float(pos.get("current_price", 0) or 0)
+        cost = float(pos.get("avg_price", 0) or 0)
+        if cost > 0 and price > 0:
+            pnl_pct = (price / cost - 1) * 100
+            if pnl_pct <= HARD_STOP_PCT:
+                extra.append({"code": code, "reason": "hard_stop",
+                              "price": price, "pnl_pct": round(pnl_pct, 2)})
+
+    # 对所有触发项真正下卖单 (全平)
+    executed = []
+    for t in triggered + extra:
+        code = t["code"]
+        s = _load_state()  # 重新加载, 避免前一笔卖出导致状态不一致
+        pos = s["positions"].get(code)
+        if not pos:
+            continue
+        qty = int(pos.get("quantity", 0) or 0)
+        if qty <= 0:
+            continue
+        r = action_place_order({"code": code, "direction": "sell",
+                                "quantity": qty, "order_type": "market",
+                                "source": "stop_check"})
+        executed.append({"code": code, "reason": t["reason"], "qty": qty,
+                         "success": r.get("success"), "pnl_pct": t.get("pnl_pct")})
+        logger.info(f"[止损检查] {code} {t['reason']} 平仓 {qty}股 "
+                    f"pnl={t.get('pnl_pct', '?')}% success={r.get('success')}")
+
+    return {"success": True, "checked": len(_load_state().get("positions", {})),
+            "triggered": len(triggered + extra), "executed": executed}
+
+
+def action_stop_status(req=None):
+    """读取所有持仓的止损状态 (供驾驶舱展示)。"""
+    s = _load_state()
+    stops = _load_stops()
+    out = []
+    for code, pos in s["positions"].items():
+        st = stops.get(code, {})
+        cost = float(pos.get("avg_price", 0) or 0)
+        price = float(pos.get("current_price", 0) or 0)
+        pnl_pct = (price / cost - 1) * 100 if cost > 0 and price > 0 else 0
+        out.append({
+            "code": code,
+            "qty": int(pos.get("quantity", 0) or 0),
+            "cost": cost,
+            "current_price": price,
+            "pnl_pct": round(pnl_pct, 2),
+            "trailing_pct": st.get("trailing_pct", 0),
+            "highest_price": st.get("highest_price", cost),
+            "activated": st.get("activated", False),
+        })
+    return {"success": True, "data": out}
+
+
 ACTIONS = {
     "all": action_all, "status": action_status, "positions": action_positions,
     "orders": action_orders, "trades": action_trades,
     "place_order": action_place_order, "fill_order": action_fill_order,
     "cancel_order": action_cancel_order, "update_price": action_update_price,
     "set_stop_loss": action_set_stop_loss,
+    "check_stops": action_check_stops,
+    "stop_status": action_stop_status,
     "reset": action_reset,
 }
 
@@ -614,17 +740,24 @@ if __name__ == "__main__":
             print(json.dumps({"success": False, "error": "invalid JSON"}))
             sys.stdout.flush()
             continue
+        req_id = req.get("__id")
         action = req.get("action", "status")
         handler = ACTIONS.get(action)
         if not handler:
-            print(json.dumps({"success": False, "error": f"unknown action: {action}"}))
+            out = {"success": False, "error": f"unknown action: {action}"}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
             sys.stdout.flush()
             continue
         try:
             result = handler(req)
-            print(json.dumps(to_py(result)))
+            result = to_py(result)
+            if req_id and isinstance(result, dict): result["__id"] = req_id
+            print(json.dumps(result))
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(json.dumps({"success": False, "error": str(e)[:500]}))
+            out = {"success": False, "error": str(e)[:500]}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
         sys.stdout.flush()

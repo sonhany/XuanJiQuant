@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Bot, Play, Square, Zap, RefreshCw, Settings, Activity, AlertTriangle, Loader2, Clock, TrendingUp, TrendingDown, FileText, AlertCircle, Terminal } from 'lucide-react';
+import { Bot, Zap, RefreshCw, Settings, Activity, AlertTriangle, Loader2, Clock, TrendingUp, TrendingDown, FileText, AlertCircle, Terminal } from 'lucide-react';
 
-const API_BASE = 'http://localhost:3334';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+const API_TOKEN = (import.meta as any).env?.VITE_ALPHACOUNCIL_API_TOKEN || '';
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...(API_TOKEN ? { 'X-AlphaCouncil-Token': API_TOKEN } : {}) });
 const ACCENT = '#A78BFA';
 
 async function api(body: any) {
   const r = await fetch(`${API_BASE}/api/paper`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: jsonHeaders(),
     body: JSON.stringify(body),
   });
   const d = await r.json();
@@ -150,7 +152,6 @@ const TokenUsageStats: React.FC<{ usage: any; loading: boolean; onRefresh: () =>
 
 const PaperPanel: React.FC = () => {
   const [meta, setMeta] = useState<StrategyMeta | null>(null);
-  const [cfg, setCfg] = useState<any>(null);
   const [status, setStatus] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -162,11 +163,11 @@ const PaperPanel: React.FC = () => {
   // 实时运行进度
   const [progressEvents, setProgressEvents] = useState<any[]>([]);
   const [runInProgress, setRunInProgress] = useState(false);
-  // AI Quant Operator
-  const [aiOperator, setAiOperator] = useState<any>(null);
-  const [aiOperatorLoading, setAiOperatorLoading] = useState(false);
   // 自主调度器状态 (判断交易由谁触发)
   const [schedActive, setSchedActive] = useState(false);
+  // 选股流 (ai_all_status 聚合: screen)
+  const [aiAll, setAiAll] = useState<any>(null);
+  const [screenLoading, setScreenLoading] = useState(false);
 
   // 本地编辑态 (独立于后端 cfg, 保存时才提交)
   const [strategy, setStrategy] = useState('ma_cross');
@@ -187,7 +188,7 @@ const PaperPanel: React.FC = () => {
 
   // 拉策略元信息 (一次性)
   useEffect(() => {
-    fetch(`${API_BASE}/api/strategy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'meta' }) })
+    fetch(`${API_BASE}/api/strategy`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ action: 'meta' }) })
       .then(r => r.json())
       .then(j => { if (j.success) setMeta(j.data); })
       .catch(() => {});
@@ -196,7 +197,7 @@ const PaperPanel: React.FC = () => {
   const refresh = useCallback(async () => {
     try {
       const d = await api({ action: 'status' });
-      setCfg(d.config); setStatus(d.status);
+      setStatus(d.status);
       setRunning(d.daemon?.running || false);
       if (d.config) {
         setStrategy(d.config.strategy_name || 'ma_cross');
@@ -227,7 +228,7 @@ const PaperPanel: React.FC = () => {
     try {
       const action = generate ? 'generate_report' : 'report';
       const r = await fetch(`${API_BASE}/api/paper`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action }),
       });
       const j = await r.json();
@@ -235,13 +236,6 @@ const PaperPanel: React.FC = () => {
       else if (generate && !j.success) setError(j.error || '生成日报失败');
     } catch (e: any) { /* 静默, 日报为可选 */ }
     setReportLoading(false);
-  }, []);
-
-  const fetchAiOperator = useCallback(async () => {
-    try {
-      const d = await api({ action: 'ai_operator_status' });
-      setAiOperator(d?.latest || null);
-    } catch { /* 静默 */ }
   }, []);
 
   // 拉取自主调度器状态 (判断交易由调度器驱动还是模拟盘独立)
@@ -252,21 +246,30 @@ const PaperPanel: React.FC = () => {
     } catch { /* 静默 */ }
   }, []);
 
-  const runAiOperator = useCallback(async () => {
-    setAiOperatorLoading(true); setError('');
+  // 拉选取股流 (ai_all_status 聚合: screen)
+  const fetchAiAll = useCallback(async () => {
     try {
-      const d = await api({ action: 'ai_operator_run', provider: llmProvider });
-      setAiOperator(d || null);
-    } catch (e: any) { setError(e.message); }
-    setAiOperatorLoading(false);
-  }, [llmProvider]);
+      const d = await api({ action: 'ai_all_status' });
+      setAiAll(d || null);
+    } catch { /* 静默 */ }
+  }, []);
 
-  useEffect(() => { refresh(); refreshLog(); fetchReport(false); fetchAiOperator(); fetchSchedStatus(); }, [refresh, refreshLog, fetchReport, fetchAiOperator, fetchSchedStatus]);
-  // 每 30 秒刷新 AI 总控 + 调度器状态
+  // 手动触发全市场选股
+  const runScreen = useCallback(async () => {
+    setScreenLoading(true); setError('');
+    try {
+      await api({ action: 'ai_screen_run', provider: llmProvider, top_n: 20 });
+      await fetchAiAll();
+    } catch (e: any) { setError(e.message); }
+    setScreenLoading(false);
+  }, [llmProvider, fetchAiAll]);
+
+  useEffect(() => { refresh(); refreshLog(); fetchReport(false); fetchSchedStatus(); fetchAiAll(); }, [refresh, refreshLog, fetchReport, fetchSchedStatus, fetchAiAll]);
+  // 每 30 秒刷新调度器 + 选股流状态
   useEffect(() => {
-    const t = setInterval(() => { fetchAiOperator(); fetchSchedStatus(); }, 30000);
+    const t = setInterval(() => { fetchSchedStatus(); fetchAiAll(); }, 30000);
     return () => clearInterval(t);
-  }, [fetchAiOperator, fetchSchedStatus]);
+  }, [fetchSchedStatus]);
   // 运行中时高频轮询日志
   useEffect(() => {
     if (!running) return;
@@ -346,7 +349,7 @@ const PaperPanel: React.FC = () => {
     setLlmTesting(true); setLlmTestResult(null);
     try {
       const r = await fetch(`${API_BASE}/api/paper`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'test_llm', provider: llmProvider }),
       });
       const j = await r.json();
@@ -388,35 +391,11 @@ const PaperPanel: React.FC = () => {
     return () => clearInterval(t);
   }, [fetchLlmUsage]);
 
-  // 启停拆成两个独立函数, 不依赖 running 闭包, 彻底避免 stale state 竞态
-  const startScheduler = useCallback(async () => {
-    setLoading(true); setError('');
-    try {
-      await saveConfig();              // 先保存最新配置
-      await api({ action: 'start' });  // 明确启动
-      setRunning(true);                // 乐观更新, 让 UI 立即反映
-      await new Promise(r => setTimeout(r, 600));
-      await refresh();
-    } catch (e: any) { setError(e.message); }
-    setLoading(false);
-  }, [saveConfig, refresh]);
-
-  const stopScheduler = useCallback(async () => {
-    setLoading(true); setError('');
-    try {
-      await api({ action: 'stop' });   // 明确停止
-      setRunning(false);
-      await new Promise(r => setTimeout(r, 400));
-      await refresh();
-    } catch (e: any) { setError(e.message); }
-    setLoading(false);
-  }, [refresh]);
-
   // 轮询进度 (运行中时每 2 秒)
   const pollProgress = useCallback(async () => {
     try {
       const r = await fetch(`${API_BASE}/api/paper`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'progress' }),
       });
       const j = await r.json();
@@ -509,64 +488,81 @@ const PaperPanel: React.FC = () => {
         </div>
       )}
 
-      {/* AI Quant Operator 总控 */}
-      <Card title="AI Quant Operator · 五层总控" right={
-        <button onClick={runAiOperator} disabled={aiOperatorLoading}
-          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', background: '#4C1D95', border: '1px solid #7C3AED', borderRadius: 6, color: '#DDD6FE', fontSize: 10, cursor: 'pointer' }}>
-          {aiOperatorLoading ? <Loader2 style={{ width: 10, height: 10, animation: 'spin 1s linear infinite' }} /> : <Bot style={{ width: 10, height: 10 }} />}
-          运行总控
+      {/* ① 选股流可视化 — 全市场 AI 轮询筛选结果 */}
+      <Card title="① 选股流 · 全市场 AI 轮询筛选" right={
+        <button onClick={runScreen} disabled={screenLoading}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', background: '#1E3A8A', border: '1px solid #3B82F6', borderRadius: 6, color: '#BFDBFE', fontSize: 10, cursor: 'pointer' }}>
+          {screenLoading ? <Loader2 style={{ width: 10, height: 10, animation: 'spin 1s linear infinite' }} /> : <Activity style={{ width: 10, height: 10 }} />}
+          手动选股
         </button>
       }>
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {aiOperator ? (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-                <div style={{ background: '#0B0F1A', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 10, color: '#475569' }}>交易策略</div>
-                  <div style={{ fontSize: 13, color: aiOperator.paper_trade_allowed ? '#4ADE80' : '#FBBF24', fontWeight: 700 }}>{aiOperator.trade_policy || 'N/A'}</div>
+        <div style={{ padding: 16 }}>
+          {(() => {
+            const screen = aiAll?.screen;
+            if (!screen || !screen.top || screen.top.length === 0) {
+              return <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: 20 }}>
+                暂无选股结果 {screen?.stats && `(全市场 ${screen.n_universe || 5207} 只, 上次过滤: ST {screen.stats.filtered_st||0} / 涨停 {screen.stats.filtered_limit||0} / 停牌 {screen.stats.filtered_halt||0} / 仙股 {screen.stats.filtered_penny||0})`}
+              </div>;
+            }
+            return (
+              <>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, color: '#64748B', background: '#0B0F1A', padding: '3px 10px', borderRadius: 10, border: '1px solid #1E293B' }}>
+                    全市场 {screen.n_universe || 5207} 只
+                  </span>
+                  <span style={{ fontSize: 10, color: '#10B981', background: '#064E3B', padding: '3px 10px', borderRadius: 10 }}>
+                    AI 复核通过 {screen.top.length} 只
+                  </span>
+                  {screen.stats && (
+                    <span style={{ fontSize: 10, color: '#64748B', background: '#0B0F1A', padding: '3px 10px', borderRadius: 10, border: '1px solid #1E293B' }}>
+                      剔除: ST {screen.stats.filtered_st||0} / 涨停 {screen.stats.filtered_limit||0} / 停牌 {screen.stats.filtered_halt||0} / 仙股 {screen.stats.filtered_penny||0} / 低置信 {screen.stats.filtered_low_conf||0}
+                    </span>
+                  )}
+                  {screen.screened_at && <span style={{ fontSize: 10, color: '#475569' }}>选股时间: {screen.screened_at}</span>}
                 </div>
-                <div style={{ background: '#0B0F1A', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 10, color: '#475569' }}>数据层</div>
-                  <div style={{ fontSize: 13, color: aiOperator.state?.data_layer?.data_stale ? '#F87171' : '#4ADE80', fontWeight: 700 }}>{aiOperator.state?.data_layer?.status || '-'}</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: '#0B0F1A' }}>
+                        {['代码', '打分', '现价', '近5日%', 'AI置信度', 'AI 理由'].map(h => (
+                          <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 10, color: '#475569', fontWeight: 600, borderBottom: '1px solid #1E293B' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {screen.top.map((t: any, i: number) => {
+                        const conf = t.confidence;
+                        const confColor = conf === null || conf === undefined ? '#64748B' : conf >= 0.7 ? '#10B981' : conf >= 0.5 ? '#F59E0B' : '#EF4444';
+                        return (
+                          <tr key={t.code} style={{ borderBottom: '1px solid #1E293B' }}>
+                            <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: '#E2E8F0' }}>
+                              <span style={{ color: '#475569', marginRight: 6 }}>#{i + 1}</span>{t.code}
+                            </td>
+                            <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#A78BFA', fontWeight: 600 }}>{(t.score || 0).toFixed(2)}</td>
+                            <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', color: '#E2E8F0' }}>{t.close ? t.close.toFixed(2) : '-'}</td>
+                            <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', color: (t.chg5 || 0) >= 0 ? '#EF4444' : '#22C55E' }}>
+                              {t.chg5 !== null && t.chg5 !== undefined ? `${t.chg5 >= 0 ? '+' : ''}${t.chg5}%` : '-'}
+                            </td>
+                            <td style={{ padding: '7px 10px', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, color: confColor }}>
+                              {conf === null || conf === undefined ? 'N/A' : conf.toFixed(2)}
+                            </td>
+                            <td style={{ padding: '7px 10px', color: '#94A3B8', fontSize: 11, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {t.reason || '(AI复核降级)'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-                <div style={{ background: '#0B0F1A', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 10, color: '#475569' }}>严重告警</div>
-                  <div style={{ fontSize: 13, color: (aiOperator.state?.risk_monitor?.critical_alerts || 0) > 0 ? '#F87171' : '#4ADE80', fontWeight: 700 }}>{aiOperator.state?.risk_monitor?.critical_alerts ?? 0}</div>
-                </div>
-                <div style={{ background: '#0B0F1A', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 10, color: '#475569' }}>生成时间</div>
-                  <div style={{ fontSize: 12, color: '#94A3B8', fontFamily: 'Consolas, monospace' }}>{String(aiOperator.generated_at || '').slice(11, 19) || '-'}</div>
-                </div>
-              </div>
-              <div style={{ padding: '10px 12px', background: '#0B0F1A', border: '1px solid #1E293B', borderRadius: 8, fontSize: 12, color: '#CBD5E1', lineHeight: 1.6 }}>
-                {aiOperator.summary || '暂无摘要'}
-              </div>
-              {(aiOperator.risk_notes || []).length > 0 && (
-                <div style={{ padding: '8px 12px', background: '#F59E0B14', border: '1px solid #F59E0B33', borderRadius: 6, fontSize: 11, color: '#FBBF24' }}>
-                  {(aiOperator.risk_notes || []).slice(0, 3).map((n: string, i: number) => <div key={i}>⚠️ {n}</div>)}
-                </div>
-              )}
-              {(aiOperator.actions || []).length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <div style={{ fontSize: 10, color: '#475569', letterSpacing: 0.3 }}>今日自我验证任务</div>
-                  {(aiOperator.actions || []).slice(0, 6).map((a: any, i: number) => (
-                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, padding: '5px 8px', background: '#0B0F1A', borderRadius: 5 }}>
-                      <span style={{ color: a.priority === 'high' ? '#F87171' : '#60A5FA', fontWeight: 700 }}>{a.priority || 'task'}</span>
-                      <span style={{ color: '#A78BFA' }}>{a.layer}</span>
-                      <span style={{ color: '#E2E8F0' }}>{a.action}</span>
-                      <span style={{ color: '#64748B' }}>— {a.reason}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{ padding: '24px 0', textAlign: 'center', color: '#475569', fontSize: 12 }}>
-              暂无 AI 总控计划, 点击「运行总控」生成五层操作建议
-            </div>
-          )}
+              </>
+            );
+          })()}
         </div>
       </Card>
+
+      {/* ② 决策流和 AI 五层总控已迁移到驾驶舱 (DashboardPanel), 这里不再重复展示 */}
+      {/* AI Quant Operator 总控已迁移到驾驶舱, 此处不再重复 */}
 
       {/* 操作按钮 — 职责分离: 调度控制归驾驶舱, 这里只管执行配置 */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -584,10 +580,11 @@ const PaperPanel: React.FC = () => {
         </div>
         <button onClick={runNow} disabled={loading}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 20px', background: '#1E293B', border: '1px solid #334155', borderRadius: 8, color: '#E2E8F0', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
-          title="手动测试执行层 (跑一次策略+下单流程)">
+          title="只跑策略+下单, 不跑 AI 闭环。AI 闭环由驾驶舱调度器自动驱动。">
           {loading ? <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} /> : <Zap style={{ width: 14, height: 14, color: ACCENT }} />}
-          立即运行一次
+          测试执行一次
         </button>
+        <span style={{ fontSize: 10, color: '#64748B' }}>只跑策略+下单, 不跑 AI 闭环</span>
         <button onClick={saveConfig} disabled={loading}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 20px', background: 'transparent', border: '1px solid #334155', borderRadius: 8, color: '#94A3B8', fontSize: 13, cursor: 'pointer' }}>
           保存配置
@@ -880,16 +877,20 @@ const PaperPanel: React.FC = () => {
             {/* 持仓明细 */}
             {(report.positions || []).length > 0 && (
               <div>
-                <div style={{ fontSize: 10, color: '#475569', marginBottom: 6, letterSpacing: 0.3 }}>持仓明细</div>
+                <div style={{ fontSize: 10, color: '#475569', marginBottom: 6, letterSpacing: 0.3 }}>持仓明细 (硬止损线 -8%)</div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead><tr style={{ borderBottom: '1px solid #1E293B' }}>
-                    {['代码', '数量', '成本', '现价', '市值', '盈亏%', '可卖'].map((h, i) => (
+                    {['代码', '数量', '成本', '现价', '市值', '盈亏%', '止损状态', '可卖'].map((h, i) => (
                       <th key={h} style={{ padding: '6px 8px', textAlign: i >= 1 ? 'right' : 'left', fontSize: 10, fontWeight: 600, color: '#475569' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {(report.positions || []).map((p: any, i: number) => {
                       const pnlPct = p.pnl_pct ?? 0;
+                      // 止损状态: 距 -8% 硬止损线的距离
+                      const stopDist = pnlPct - (-8);
+                      const stopColor = pnlPct <= -8 ? '#EF4444' : pnlPct <= -5 ? '#F59E0B' : '#10B981';
+                      const stopLabel = pnlPct <= -8 ? '⚠已触发' : pnlPct <= -5 ? `接近 ${stopDist.toFixed(1)}%` : '安全';
                       return (
                         <tr key={i} style={{ borderBottom: '1px solid #1E293B44' }}>
                           <td style={{ padding: '6px 8px', fontFamily: 'JetBrains Mono, monospace', color: '#60A5FA', fontWeight: 600 }}>{p.code}</td>
@@ -898,6 +899,7 @@ const PaperPanel: React.FC = () => {
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: '#94A3B8' }}>{p.current_price?.toFixed(2)}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: '#94A3B8' }}>{p.market_value?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: pnlPct >= 0 ? '#4ADE80' : '#F87171', fontWeight: 600 }}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontSize: 10, fontWeight: 600, color: stopColor }}>{stopLabel}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'JetBrains Mono, monospace', color: p.available_qty > 0 ? '#4ADE80' : '#475569' }}>{p.available_qty}</td>
                         </tr>
                       );

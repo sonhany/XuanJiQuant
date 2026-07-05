@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>璇玑 XUANJI — 品牌设计手册</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #FAFAF7;
+    color: #1A1A1A;
+    line-height: 1.8;
+    overflow-x: hidden;
+  }
+  .kai { font-family: "KaiTi", "STKaiti", "楷体", serif; }
+
+  /* ===== HERO ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(160deg, #FAFAF7 0%, #F0EDE3 50%, #E8E4D5 100%);
+    padding: 60px 20px;
+    position: relative;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #D4A531, transparent);
+  }
+  .hero-logo {
+    width: 220px;
+    height: 220px;
+    margin-bottom: 30px;
+    filter: drop-shadow(0 4px 20px rgba(5,65,47,0.15));
+  }
+  .hero-name {
+    font-size: 64px;
+    font-weight: 700;
+    color: #05412F;
+    letter-spacing: 20px;
+    margin-bottom: 8px;
+  }
+  .hero-en {
+    font-size: 16px;
+    color: #9A7510;
+    letter-spacing: 10px;
+    font-weight: 600;
+    margin-bottom: 20px;
+  }
+  .hero-tagline {
+    font-size: 18px;
+    color: #666;
+    letter-spacing: 4px;
+    margin-bottom: 40px;
+  }
+  .hero-meta {
+    font-size: 13px;
+    color: #999;
+    letter-spacing: 2px;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #D4A531, transparent);
+  }
+
+  /* ===== SECTION ===== */
+  .section {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 80px 24px;
+  }
+  .section-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #05412F;
+    text-align: center;
+    letter-spacing: 6px;
+    margin-bottom: 8px;
+  }
+  .section-subtitle {
+    font-size: 12px;
+    color: #9A7510;
+    text-align: center;
+    letter-spacing: 3px;
+    margin-bottom: 40px;
+    text-transform: uppercase;
+  }
+  .divider {
+    width: 60px;
+    height: 2px;
+    background: #D4A531;
+    margin: 0 auto 40px;
+    border-radius: 1px;
+  }
+
+  /* ===== NAMING ===== */
+  .quote-box {
+    background: #F5F2E8;
+    border: 1px solid #E0D9C0;
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    margin-bottom: 30px;
+  }
+  .quote-text {
+    font-size: 28px;
+    color: #05412F;
+    letter-spacing: 6px;
+    margin-bottom: 12px;
+  }
+  .quote-source {
+    font-size: 14px;
+    color: #9A7510;
+    letter-spacing: 2px;
+  }
+  .meaning-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 30px;
+  }
+  .meaning-card {
+    background: white;
+    border-radius: 10px;
+    padding: 24px;
+    border: 1px solid #EEE;
+  }
+  .meaning-char {
+    font-size: 36px;
+    color: #05412F;
+    margin-bottom: 8px;
+  }
+  .meaning-pinyin {
+    font-size: 12px;
+    color: #9A7510;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+  .meaning-desc {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.7;
+  }
+
+  /* ===== ANATOMY ===== */
+  .anatomy-container {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .anatomy-symbol {
+    width: 300px;
+    height: 300px;
+    flex-shrink: 0;
+  }
+  .anatomy-notes {
+    flex: 1;
+    min-width: 300px;
+    max-width: 400px;
+  }
+  .anatomy-item {
+    margin-bottom: 24px;
+    padding-left: 16px;
+    border-left: 3px solid #D4A531;
+  }
+  .anatomy-item-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #05412F;
+    margin-bottom: 4px;
+  }
+  .anatomy-item-desc {
+    font-size: 13px;
+    color: #666;
+  }
+
+  /* ===== COLORS ===== */
+  .color-row {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .color-card {
+    width: 280px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  }
+  .color-swatch {
+    height: 120px;
+    display: flex;
+    align-items: flex-end;
+    padding: 16px;
+  }
+  .color-swatch-name {
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 2px;
+  }
+  .color-info {
+    padding: 16px;
+    background: white;
+  }
+  .color-hex {
+    font-size: 12px;
+    color: #888;
+    font-family: monospace;
+    margin-bottom: 8px;
+  }
+  .color-meaning {
+    font-size: 12px;
+    color: #555;
+  }
+
+  /* ===== VARIATIONS ===== */
+  .var-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .var-card {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    border: 1px solid #EEE;
+    text-align: center;
+  }
+  .var-card.dark {
+    background: #1A1A2E;
+  }
+  .var-card.dark .var-label {
+    color: #999;
+  }
+  .var-label {
+    font-size: 12px;
+    color: #999;
+    margin-top: 16px;
+    letter-spacing: 2px;
+  }
+  .var-icon-box {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto;
+    border-radius: 18px;
+    background: #05412F;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+  }
+
+  /* ===== ALTERNATIVES ===== */
+  .alt-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .alt-item {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 20px;
+    background: white;
+    border-radius: 10px;
+    border: 1px solid #EEE;
+    transition: border-color 0.2s;
+  }
+  .alt-item:hover {
+    border-color: #D4A531;
+  }
+  .alt-item.primary {
+    border: 2px solid #0D7A5F;
+    background: #F0FAF6;
+  }
+  .alt-rank {
+    font-size: 24px;
+    font-weight: 700;
+    color: #D4A531;
+    width: 40px;
+  }
+  .alt-item.primary .alt-rank {
+    color: #0D7A5F;
+  }
+  .alt-content { flex: 1; }
+  .alt-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #05412F;
+    margin-bottom: 4px;
+  }
+  .alt-source {
+    font-size: 12px;
+    color: #9A7510;
+    margin-bottom: 6px;
+  }
+  .alt-desc {
+    font-size: 12px;
+    color: #666;
+  }
+  .alt-badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: #0D7A5F;
+    color: white;
+    letter-spacing: 1px;
+  }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    text-align: center;
+    padding: 60px 20px 40px;
+    background: #F0EDE3;
+  }
+  .footer-logo {
+    width: 60px;
+    height: 60px;
+    margin-bottom: 16px;
+    opacity: 0.8;
+  }
+  .footer-text {
+    font-size: 13px;
+    color: #888;
+    letter-spacing: 2px;
+  }
+  .footer-copy {
+    font-size: 11px;
+    color: #bbb;
+    margin-top: 8px;
+  }
+
+  @media (max-width: 600px) {
+    .hero-name { font-size: 44px; letter-spacing: 12px; }
+    .meaning-grid { grid-template-columns: 1fr; }
+    .var-grid { grid-template-columns: 1fr; }
+    .anatomy-container { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<div class="hero">
+  <svg class="hero-logo" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="jadeG" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0D7A5F"/><stop offset="100%" stop-color="#05412F"/>
+      </linearGradient>
+      <linearGradient id="goldG" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#D4A531"/><stop offset="100%" stop-color="#9A7510"/>
+      </linearGradient>
+      <mask id="ringM"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+    </defs>
+    <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jadeG)" mask="url(#ringM)"/>
+    <circle cx="60" cy="60" r="25" fill="none" stroke="url(#goldG)" stroke-width="2"/>
+    <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+    <polygon points="60,47 69,60 60,73 51,60" fill="url(#goldG)"/>
+    <circle cx="60" cy="60" r="3" fill="#05412F"/>
+  </svg>
+  <div class="hero-name kai">璇玑</div>
+  <div class="hero-en">X U A N J I</div>
+  <div class="hero-tagline kai">璇玑玉衡 · 智齐七政</div>
+  <div class="hero-meta">AI自主量化交易系统 · 品牌设计手册 · 2026</div>
+</div>
+
+<!-- ============ NAMING ============ -->
+<div class="section">
+  <div class="section-title kai">命名溯源</div>
+  <div class="section-subtitle">Etymology</div>
+  <div class="divider"></div>
+
+  <div class="quote-box">
+    <div class="quote-text kai">「璇玑玉衡，以齐七政」</div>
+    <div class="quote-source">——《尚书 · 舜典》</div>
+  </div>
+
+  <div class="meaning-grid">
+    <div class="meaning-card">
+      <div class="meaning-char kai">璇</div>
+      <div class="meaning-pinyin">XUÁN</div>
+      <div class="meaning-desc">美玉之称。北斗第二星曰天璇，与天枢合称"魁"。象天地之枢机，以玉之温润喻智慧之深邃。</div>
+    </div>
+    <div class="meaning-card">
+      <div class="meaning-char kai">玑</div>
+      <div class="meaning-pinyin">JĪ</div>
+      <div class="meaning-desc">天文测算之器。新石器时代已有牙璧形玉璇玑，以观测日月五星运行轨迹。古人以玑衡齐七政，今人以AI齐七层。</div>
+    </div>
+  </div>
+
+  <div style="margin-top: 30px; padding: 24px; background: #F0FAF6; border-radius: 10px; border-left: 4px solid #0D7A5F;">
+    <div style="font-size: 14px; font-weight: 700; color: #05412F; margin-bottom: 8px;">与系统的关联</div>
+    <div style="font-size: 13px; color: #555; line-height: 1.8;">
+      <strong>七政</strong>——日、月与金木水火土五星，古称七曜。对应本系统之<strong>七层架构</strong>（L0基础→L1数据→L2因子→L3策略→L4组合→L5执行→L6风控→L7自进化），各司其职，浑然一体。<br>
+      <strong>璇玑</strong>——上古天文测算仪器，以玉为之，牙璧形制。是人类最早的"计算装置"之一，以观测天象、推演规律。正如AI系统以数据观测市场、推演策略。<br>
+      <strong>以齐</strong>——齐者，正也、治也。璇玑玉衡以正七政，AI系统以正七层，使各层协调运转、自主决策。
+    </div>
+  </div>
+</div>
+
+<!-- ============ ANATOMY ============ -->
+<div class="section" style="background: #F5F2E8;">
+  <div class="section-title kai">标识释义</div>
+  <div class="section-subtitle">Symbol Anatomy</div>
+  <div class="divider"></div>
+
+  <div class="anatomy-container">
+    <svg class="anatomy-symbol" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="jadeG2" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#0D7A5F"/><stop offset="100%" stop-color="#05412F"/>
+        </linearGradient>
+        <linearGradient id="goldG2" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#D4A531"/><stop offset="100%" stop-color="#9A7510"/>
+        </linearGradient>
+        <mask id="ringM2"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+      </defs>
+      <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jadeG2)" mask="url(#ringM2)"/>
+      <circle cx="60" cy="60" r="25" fill="none" stroke="url(#goldG2)" stroke-width="2"/>
+      <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+      <polygon points="60,47 69,60 60,73 51,60" fill="url(#goldG2)"/>
+      <circle cx="60" cy="60" r="3" fill="#05412F"/>
+      <!-- annotation dots -->
+      <circle cx="60" cy="10" r="2" fill="#A32D2D"/>
+      <circle cx="60" cy="60" r="2" fill="#A32D2D" opacity="0"/>
+    </svg>
+
+    <div class="anatomy-notes">
+      <div class="anatomy-item">
+        <div class="anatomy-item-title">七政星轮（外延七尖）</div>
+        <div class="anatomy-item-desc">青玉七角星轮，对应系统七层架构。七星环绕，如北斗指引方向——L1数据感知至L7自进化，层层递进，缺一不可。</div>
+      </div>
+      <div class="anatomy-item">
+        <div class="anatomy-item-title">璇玑金环（中央玉璧）</div>
+        <div class="anatomy-item-desc">鎏金圆环贯穿星轮中央，取璇玑玉衡之"环形天文仪器"意象。古人以环测天，今人以环喻市——市场如天象，循环往复，可测可算。</div>
+      </div>
+      <div class="anatomy-item">
+        <div class="anatomy-item-title">枢机金钻（中心菱形）</div>
+        <div class="anatomy-item-desc">金钻居中，为AI自主决策中枢。"枢机之发，荣辱之主也"——一切决策由此而出，硬风控为底，AI自主为用。</div>
+      </div>
+      <div class="anatomy-item">
+        <div class="anatomy-item-title">青玉深点（核心锚点）div>
+        <div class="anatomy-item-desc">金钻中央之深青圆点，象征不可动摇之安全底线——硬风控护栏、可审计可回滚、实盘隔离。AI自主权再大，此点不可逾越。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ COLORS ============ -->
+<div class="section">
+  <div class="section-title kai">色彩体系</div>
+  <div class="section-subtitle">Color Palette</div>
+  <div class="divider"></div>
+
+  <div class="color-row">
+    <div class="color-card">
+      <div class="color-swatch" style="background: linear-gradient(135deg, #0D7A5F, #05412F);">
+        <div class="color-swatch-name kai">青玉</div>
+      </div>
+      <div class="color-info">
+        <div class="color-hex">#0D7A5F → #05412F</div>
+        <div class="color-meaning">
+          <strong>Jade Green</strong><br>
+          温润如玉，生生不息。取自古玉之色，象征中华文明之底蕴，亦喻系统之稳健与持续进化。青玉为品牌主色，传递信任、专业与持久。
+        </div>
+      </div>
+    </div>
+
+    <div class="color-card">
+      <div class="color-swatch" style="background: linear-gradient(135deg, #D4A531, #9A7510);">
+        <div class="color-swatch-name kai">鎏金</div>
+      </div>
+      <div class="color-info">
+        <div class="color-hex">#D4A531 → #9A7510</div>
+        <div class="color-meaning">
+          <strong>Bronze Gold</strong><br>
+          吉金煌煌，权威尊贵。取自青铜器之鎏金，象征决策之精准与市场之财富。鎏金为品牌辅色，用于点缀与强调，不可大面积使用。
+        </div>
+      </div>
+    </div>
+
+    <div class="color-card">
+      <div class="color-swatch" style="background: linear-gradient(135deg, #A32D2D, #501313);">
+        <div class="color-swatch-name kai">朱砂</div>
+      </div>
+      <div class="color-info">
+        <div class="color-hex">#A32D2D → #501313</div>
+        <div class="color-meaning">
+          <strong>Cinnabar Red</strong><br>
+          中国传统正色，亦为A股上涨之色（红涨绿跌）。朱砂仅用于风控警示与关键涨跌信号，不作为品牌常规用色。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ VARIATIONS ============ -->
+<div class="section" style="background: #F5F2E8;">
+  <div class="section-title kai">标识规范</div>
+  <div class="section-subtitle">Logo Variations</div>
+  <div class="divider"></div>
+
+  <div class="var-grid">
+    <div class="var-card">
+      <svg width="200" height="60" viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="jG3" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0D7A5F"/><stop offset="100%" stop-color="#05412F"/></linearGradient>
+          <linearGradient id="gG3" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#D4A531"/><stop offset="100%" stop-color="#9A7510"/></linearGradient>
+          <mask id="rM3"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+        </defs>
+        <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jG3)" mask="url(#rM3)"/>
+        <circle cx="60" cy="60" r="25" fill="none" stroke="url(#gG3)" stroke-width="2"/>
+        <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+        <polygon points="60,47 69,60 60,73 51,60" fill="url(#gG3)"/>
+        <circle cx="60" cy="60" r="3" fill="#05412F"/>
+        <text x="140" y="58" font-size="38" font-weight="700" fill="#05412F" font-family="KaiTi,serif" letter-spacing="8">璇玑</text>
+        <text x="142" y="82" font-size="13" font-weight="600" fill="#9A7510" font-family="sans-serif" letter-spacing="4">XUANJI</text>
+      </svg>
+      <div class="var-label">标准横向组合</div>
+    </div>
+
+    <div class="var-card dark">
+      <svg width="200" height="60" viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="jG4" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1BA87F"/><stop offset="100%" stop-color="#0D7A5F"/></linearGradient>
+          <linearGradient id="gG4" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4B541"/><stop offset="100%" stop-color="#D4A531"/></linearGradient>
+          <mask id="rM4"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+        </defs>
+        <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jG4)" mask="url(#rM4)"/>
+        <circle cx="60" cy="60" r="25" fill="none" stroke="url(#gG4)" stroke-width="2"/>
+        <circle cx="60" cy="60" r="19" fill="none" stroke="#1BA87F" stroke-width="0.8" opacity="0.4"/>
+        <polygon points="60,47 69,60 60,73 51,60" fill="url(#gG4)"/>
+        <circle cx="60" cy="60" r="3" fill="#1A1A2E"/>
+        <text x="140" y="58" font-size="38" font-weight="700" fill="#E4B541" font-family="KaiTi,serif" letter-spacing="8">璇玑</text>
+        <text x="142" y="82" font-size="13" font-weight="600" fill="#1BA87F" font-family="sans-serif" letter-spacing="4">XUANJI</text>
+      </svg>
+      <div class="var-label">深色背景版</div>
+    </div>
+
+    <div class="var-card">
+      <svg width="60" height="60" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="jG5" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0D7A5F"/><stop offset="100%" stop-color="#05412F"/></linearGradient>
+          <linearGradient id="gG5" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#D4A531"/><stop offset="100%" stop-color="#9A7510"/></linearGradient>
+          <mask id="rM5"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+        </defs>
+        <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jG5)" mask="url(#rM5)"/>
+        <circle cx="60" cy="60" r="25" fill="none" stroke="url(#gG5)" stroke-width="2"/>
+        <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+        <polygon points="60,47 69,60 60,73 51,60" fill="url(#gG5)"/>
+        <circle cx="60" cy="60" r="3" fill="#05412F"/>
+      </svg>
+      <div class="var-label">纯图形标识</div>
+    </div>
+
+    <div class="var-card">
+      <div class="var-icon-box">
+        <svg width="52" height="52" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="jG6" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1BA87F"/><stop offset="100%" stop-color="#0D7A5F"/></linearGradient>
+            <linearGradient id="gG6" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4B541"/><stop offset="100%" stop-color="#D4A531"/></linearGradient>
+            <mask id="rM6"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+          </defs>
+          <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jG6)" mask="url(#rM6)"/>
+          <circle cx="60" cy="60" r="25" fill="none" stroke="url(#gG6)" stroke-width="2"/>
+          <polygon points="60,47 69,60 60,73 51,60" fill="url(#gG6)"/>
+          <circle cx="60" cy="60" r="3" fill="#05412F"/>
+        </svg>
+      </div>
+      <div class="var-label">App图标版</div>
+    </div>
+  </div>
+
+  <div style="margin-top: 24px; padding: 16px 20px; background: #FFF8E8; border-radius: 8px; border: 1px solid #F0E0A0;">
+    <div style="font-size: 12px; color: #9A7510; line-height: 1.8;">
+      <strong>使用规范：</strong>
+      标识最小使用尺寸为 24×24 像素（图形标识）或 120×40 像素（横向组合）。
+      标识周围需保持不小于标识高度 1/4 的安全间距。
+      严禁拉伸、变形、更改颜色或添加投影特效。深色背景使用深色版标识。
+    </div>
+  </div>
+</div>
+
+<!-- ============ ALTERNATIVES ============ -->
+<div class="section">
+  <div class="section-title kai">候选名称</div>
+  <div class="section-subtitle">Alternative Names</div>
+  <div class="divider"></div>
+
+  <div class="alt-list">
+    <div class="alt-item primary">
+      <div class="alt-rank kai">一</div>
+      <div class="alt-content">
+        <div class="alt-name kai">璇玑 <span style="font-size: 14px; color: #9A7510; letter-spacing: 2px;">XUANJI</span> <span class="alt-badge">推荐</span></div>
+        <div class="alt-source kai">「璇玑玉衡，以齐七政」——《尚书·舜典》</div>
+        <div class="alt-desc">上古天文测算之玉器，以齐七政（日月五星）。七政完美对应系统七层架构，璇玑本身即人类最早的"计算装置"。辨识度极高，文化底蕴深厚。</div>
+      </div>
+    </div>
+
+    <div class="alt-item">
+      <div class="alt-rank kai">二</div>
+      <div class="alt-content">
+        <div class="alt-name kai">天衍 <span style="font-size: 14px; color: #9A7510; letter-spacing: 2px;">TIANYAN</span></div>
+        <div class="alt-source kai">「大衍之数五十，其用四十有九」——《周易·系辞》</div>
+        <div class="alt-desc">天者至高，衍者推演。天衍寓意天道推演、无穷进化，契合AI自进化能力。但"天衍"在科技领域有一定使用，辨识度略逊璇玑。</div>
+      </div>
+    </div>
+
+    <div class="alt-item">
+      <div class="alt-rank kai">三</div>
+      <div class="alt-content">
+        <div class="alt-name kai">玄弈 <span style="font-size: 14px; color: #9A7510; letter-spacing: 2px;">XUANYI</span></div>
+        <div class="alt-source kai">「玄之又玄，众妙之门」——《道德经》</div>
+        <div class="alt-desc">玄者深妙，弈者棋局。寓意AI以深妙之智弈市场之局。文化意象丰富，但"弈"字偏向博弈对抗，不如璇玑之测算意涵贴切。</div>
+      </div>
+    </div>
+
+    <div class="alt-item">
+      <div class="alt-rank kai">四</div>
+      <div class="alt-content">
+        <div class="alt-name kai">运筹 <span style="font-size: 14px; color: #9A7510; letter-spacing: 2px;">YUNCHOU</span></div>
+        <div class="alt-source kai">「运筹帷幄之中，决胜千里之外」——《史记·高祖本纪》</div>
+        <div class="alt-desc">运筹者，以筹策运算。意象经典但"运筹"一词在日常使用中较为常见，辨识度不足，且与"运筹学"(Operations Research) 易混淆。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FOOTER ============ -->
+<div class="footer">
+  <svg class="footer-logo" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="jGf" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0D7A5F"/><stop offset="100%" stop-color="#05412F"/></linearGradient>
+      <linearGradient id="gGf" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#D4A531"/><stop offset="100%" stop-color="#9A7510"/></linearGradient>
+      <mask id="rMf"><rect width="120" height="120" fill="white"/><circle cx="60" cy="60" r="25" fill="black"/></mask>
+    </defs>
+    <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jGf)" mask="url(#rMf)"/>
+    <circle cx="60" cy="60" r="25" fill="none" stroke="url(#gGf)" stroke-width="2"/>
+    <polygon points="60,47 69,60 60,73 51,60" fill="url(#gGf)"/>
+    <circle cx="60" cy="60" r="3" fill="#05412F"/>
+  </svg>
+  <div class="footer-text kai">璇玑 · 智齐七政 · AI自主量化交易系统</div>
+  <div class="footer-copy">AlphaCouncil2-AI · 2026</div>
+</div>
+
+</body>
+</html>

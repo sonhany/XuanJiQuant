@@ -162,10 +162,55 @@ def action_factor_stocks(req):
     top_n = int(req.get("top_n", 20))
     bottom_n = int(req.get("bottom_n", 20))
 
+    def _build_snapshot(limit: int = 300):
+        keys = cache.keys('kline:*:d')[:limit]
+        rows = []
+        fe = FactorEngine(cache=None)
+        for k in keys:
+            bars = cache.get(k)
+            if not bars or len(bars) < 30:
+                continue
+            code = k.split(':')[1]
+            try:
+                df = load_kline_df(bars)
+                fdf = fe.compute_all(df, code=code)
+                if fdf.empty:
+                    continue
+                latest = fdf.iloc[-1]
+                close = float(latest.get('close', 0) or 0)
+                prev_close = float(fdf.iloc[-2].get('close', close) or close) if len(fdf) >= 2 else close
+                chg = round((close - prev_close) / prev_close * 100, 2) if prev_close else 0
+                fvals = {}
+                for col in fdf.columns:
+                    if col in ('date', 'open', 'high', 'low', 'close', 'volume', 'amount'):
+                        continue
+                    v = latest.get(col)
+                    try:
+                        fv = float(v)
+                        if not math.isnan(fv):
+                            fvals[col] = round(fv, 4)
+                    except Exception:
+                        pass
+                rows.append({
+                    'code': code,
+                    'name': cache.get(f'stock:name:{code}') or code,
+                    'close': round(close, 2),
+                    'change_pct': chg,
+                    'factors': fvals,
+                })
+            except Exception:
+                continue
+        snap = {'rows': rows, '_ts': _time.time(), 'n': len(rows), 'source': 'factor_runner_fallback'}
+        if rows:
+            cache.set('factor:snapshot', snap, ttl=1800)
+        return snap
+
     # 读截面缓存 (由 scripts/precompute_snapshot.py 预计算)
     snapshot = cache.get('factor:snapshot')
     if not snapshot or not snapshot.get('rows'):
-        return {"success": False, "error": "尚未预计算因子截面，请先运行: python scripts/precompute_snapshot.py"}
+        snapshot = _build_snapshot()
+    if not snapshot or not snapshot.get('rows'):
+        return {"success": False, "error": "尚未预计算因子截面，且即时构建失败"}
 
     rows = snapshot['rows']
     # 按指定因子排序
@@ -209,14 +254,20 @@ if __name__ == "__main__":
         except Exception:
             print(clean({"success": False, "error": "invalid JSON"}))
             sys.stdout.flush(); continue
+        req_id = req.get("__id")
         action = req.get("action", "meta")
         handler = ACTIONS.get(action)
         if not handler:
-            print(clean({"success": False, "error": f"unknown action: {action}"}))
+            out = {"success": False, "error": f"unknown action: {action}"}
+            if req_id: out["__id"] = req_id
+            print(clean(out))
             sys.stdout.flush(); continue
         try:
             result = handler(req)
+            if req_id and isinstance(result, dict): result["__id"] = req_id
             print(clean(result))
         except Exception as e:
-            print(clean({"success": False, "error": str(e)[:500]}))
+            out = {"success": False, "error": str(e)[:500]}
+            if req_id: out["__id"] = req_id
+            print(clean(out))
         sys.stdout.flush()

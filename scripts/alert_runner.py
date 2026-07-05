@@ -585,17 +585,23 @@ if __name__ == "__main__":
             print(json.dumps({"success": False, "error": "invalid JSON"}))
             sys.stdout.flush()
             continue
+        req_id = req.get("__id")
         action = req.get("action", "list")
         handler = ACTIONS.get(action)
         if not handler:
-            print(json.dumps({"success": False, "error": f"unknown action: {action}"}))
+            out = {"success": False, "error": f"unknown action: {action}"}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
             sys.stdout.flush()
             continue
         try:
             result = handler(req)
+            if req_id and isinstance(result, dict): result["__id"] = req_id
             print(json.dumps(result))
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(json.dumps({"success": False, "error": str(e)[:500]}))
+            out = {"success": False, "error": str(e)[:500]}
+            if req_id: out["__id"] = req_id
+            print(json.dumps(out))
         sys.stdout.flush()

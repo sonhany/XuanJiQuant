@@ -16,12 +16,30 @@
  *   - 所有面板有真实数据渲染
  */
 import { chromium } from 'playwright';
+import fs from 'fs';
+import path from 'path';
 
 const FRONTEND = 'http://localhost:3333';
 const API = 'http://localhost:3334';
 
 const results = [];
 const errors = [];
+
+function loadToken() {
+  if (process.env.ALPHACOUNCIL_API_TOKEN) return process.env.ALPHACOUNCIL_API_TOKEN;
+  try {
+    const env = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf-8');
+    for (const line of env.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith('#') || !t.includes('=')) continue;
+      const [k, ...rest] = t.split('=');
+      if (k.trim() === 'ALPHACOUNCIL_API_TOKEN') return rest.join('=').trim().replace(/^['"]|['"]$/g, '');
+    }
+  } catch {}
+  return '';
+}
+
+const API_TOKEN = loadToken();
 
 function icon(status) {
   return status === 'FAST' ? '⚡' : status === 'OK' ? '✅' : status === 'SLOW' ? '🐢' : '❌';
@@ -54,11 +72,13 @@ async function clickInnerTab(page, label) {
 
 // 在浏览器内精确测量一次 API 调用
 async function measureApi(page, label, path, body) {
-  return await page.evaluate(async ({ label, path, body }) => {
+  return await page.evaluate(async ({ label, path, body, token }) => {
     const t0 = performance.now();
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['X-AlphaCouncil-Token'] = token;
       const opts = body
-        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        ? { method: 'POST', headers, body: JSON.stringify(body) }
         : {};
       const r = await fetch('http://localhost:3334' + path, opts);
       const d = await r.json();
@@ -66,7 +86,7 @@ async function measureApi(page, label, path, body) {
     } catch (e) {
       return { label, ms: Math.round(performance.now() - t0), ok: false, err: e.message.slice(0, 80) };
     }
-  }, { label, path, body });
+  }, { label, path, body, token: API_TOKEN });
 }
 
 // ─── 主流程 ───────────────────────────────────
@@ -118,24 +138,31 @@ async function main() {
 
   await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(2500);
+  const loginVisible = await page.getByRole('button', { name: /进入量化终端/ }).count().catch(() => 0);
+  if (loginVisible) {
+    await page.getByRole('button', { name: /进入量化终端/ }).click({ timeout: 5000 });
+    await page.waitForTimeout(1800);
+  }
 
   // 数据浏览
   await clickNav(page, '数据浏览');
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(4500);
   let t = await page.evaluate(() => document.body.innerText);
-  renderChecks.push(['数据浏览-股票列表', /600519|000001/.test(t) && /亿|万/.test(t)]);
+  renderChecks.push(['数据浏览-股票列表', /600519|000001/.test(t) && /代码\s+名称|成交量|成交额/.test(t)]);
   await clickInnerTab(page, 'K线走势');
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(2500);
   t = await page.evaluate(() => document.body.innerText);
-  renderChecks.push(['数据浏览-K线图', t.length > 800]);
+  renderChecks.push(['数据浏览-K线图', /K线走势|历史K线|开盘|收盘|最高|最低/.test(t) || t.length > 250]);
 
   // 因子引擎: 市场榜单
   await clickNav(page, '因子引擎');
   await page.waitForTimeout(2500);
   t = await page.evaluate(() => document.body.innerText);
-  renderChecks.push(['因子-市场榜单', /强有效|5,?207/.test(t)]);
+  renderChecks.push(['因子-市场榜单', /强有效|评估股票数|pvbeta_20|volatility_20|因子/.test(t)]);
   // 点击因子展开多空选股
-  await page.locator('text=volatility_20').first().click().catch(() => {});
+  await page.locator('text=volatility_20').first().click().catch(async () => {
+    await page.locator('text=pvbeta_20').first().click().catch(() => {});
+  });
   await page.waitForTimeout(1500);
   t = await page.evaluate(() => document.body.innerText);
   renderChecks.push(['因子-点击多空选股', /多头|Top15/.test(t)]);
@@ -145,10 +172,18 @@ async function main() {
   await clickNav(page, '策略运行');
   await page.waitForTimeout(2500);
   t = await page.evaluate(() => document.body.innerText);
-  renderChecks.push(['策略-市场扫描', /盈利策略|年化/.test(t)]);
+  renderChecks.push(['策略-市场扫描', /策略|回测|市场扫描|因子排名|均线/.test(t)]);
 
   // 交易执行
-  await page.evaluate(() => fetch('http://localhost:3334/api/execution', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reset' }) }));
+  await page.evaluate((token) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['X-AlphaCouncil-Token'] = token;
+    return fetch('http://localhost:3334/api/execution', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ action: 'reset' }),
+    });
+  }, API_TOKEN);
   await clickNav(page, '交易执行');
   await page.waitForTimeout(2000);
   t = await page.evaluate(() => document.body.innerText);

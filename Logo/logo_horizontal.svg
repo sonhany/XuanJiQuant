@@ -1,0 +1,26 @@
+<svg viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="jadeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D7A5F"/>
+      <stop offset="100%" stop-color="#05412F"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4A531"/>
+      <stop offset="100%" stop-color="#9A7510"/>
+    </linearGradient>
+    <mask id="ringMask">
+      <rect width="120" height="120" fill="white"/>
+      <circle cx="60" cy="60" r="25" fill="black"/>
+    </mask>
+  </defs>
+  <g transform="translate(0,0)">
+    <polygon points="60,10 74.8,29.4 99.1,28.8 93.2,52.4 108.8,71.1 86.6,81.2 81.7,105 60,94 38.3,105 33.4,81.2 11.3,71.1 26.9,52.4 20.9,28.8 45.3,29.4" fill="url(#jadeGrad)" mask="url(#ringMask)"/>
+    <circle cx="60" cy="60" r="25" fill="none" stroke="url(#goldGrad)" stroke-width="2"/>
+    <circle cx="60" cy="60" r="19" fill="none" stroke="#0D7A5F" stroke-width="0.8" opacity="0.4"/>
+    <polygon points="60,47 69,60 60,73 51,60" fill="url(#goldGrad)"/>
+    <circle cx="60" cy="60" r="3" fill="#05412F"/>
+  </g>
+  <text x="140" y="58" font-size="38" font-weight="700" fill="#05412F" font-family="KaiTi, STKaiti, serif" letter-spacing="8">璇玑</text>
+  <text x="142" y="82" font-size="13" font-weight="600" fill="#9A7510" font-family="system-ui, sans-serif" letter-spacing="4">XUANJI</text>
+  <text x="142" y="100" font-size="10" fill="#888" font-family="KaiTi, STKaiti, serif" letter-spacing="2">璇玑玉衡 · 智齐七政</text>
+</svg>

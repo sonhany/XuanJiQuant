@@ -14,6 +14,8 @@ export class PersistentRunner {
     this.queue = [];
     this.busy = false;
     this.closing = false;
+    this.current = null;
+    this.seq = 0;
   }
 
   ensure() {
@@ -46,37 +48,62 @@ export class PersistentRunner {
       const line = this.buffer.slice(0, idx);
       this.buffer = this.buffer.slice(idx + 1);
       if (!line.trim()) continue;
-      const pending = this.queue.shift();
-      if (pending) {
+      const pending = this.current;
+      if (!pending) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch (e) {
         clearTimeout(pending.timer);
+        this.current = null;
         this.busy = false;
-        try {
-          pending.resolve(JSON.parse(line));
-        } catch (e) {
-          pending.reject(new Error(`parse error: ${e.message}, raw: ${line.slice(0, 200)}`));
-        }
+        pending.reject(new Error(`parse error: ${e.message}, raw: ${line.slice(0, 200)}`));
         this._next();
+        continue;
       }
+      if (!parsed || parsed.__id !== pending.id) {
+        clearTimeout(pending.timer);
+        this.current = null;
+        this.busy = false;
+        pending.reject(new Error(`response id mismatch: got=${parsed?.__id || 'missing'} expected=${pending.id}`));
+        this._next();
+        continue;
+      }
+      clearTimeout(pending.timer);
+      this.current = null;
+      this.busy = false;
+      delete parsed.__id;
+      pending.resolve(parsed);
+      this._next();
     }
   }
 
   _next() {
     if (this.busy || this.queue.length === 0) return;
     this.busy = true;
-    const pending = this.queue[0];
+    const pending = this.queue.shift();
+    this.current = pending;
     this.ensure();
-    this.proc.stdin.write(JSON.stringify(pending.body) + '\n');
+    this.proc.stdin.write(JSON.stringify({ ...pending.body, __id: pending.id }) + '\n');
   }
 
   async call(body, timeout = 120000) {
     return new Promise((resolve, reject) => {
+      const id = `req_${Date.now()}_${++this.seq}`;
       const timer = setTimeout(() => {
         const idx = this.queue.indexOf(entry);
         if (idx !== -1) this.queue.splice(idx, 1);
-        if (this.queue.length === 0) this.busy = false;
+        if (this.current === entry) {
+          this.current = null;
+          this.busy = false;
+          try { this.proc?.kill(); } catch {}
+          this.proc = null;
+          this.buffer = '';
+        }
         reject(new Error(`timeout ${timeout}ms`));
+        this._next();
       }, timeout);
-      const entry = { body, resolve, reject, timer };
+      const entry = { id, body, resolve, reject, timer };
       this.queue.push(entry);
       if (!this.busy) this._next();
     });

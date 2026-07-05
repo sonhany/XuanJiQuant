@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, RefreshCw, TrendingUp, TrendingDown, Database, Clock, BarChart3, Activity, Settings, Play, Square, Power, X, Plus, RotateCcw } from 'lucide-react';
 
-const API_BASE = 'http://localhost:3334';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+const API_TOKEN = (import.meta as any).env?.VITE_ALPHACOUNCIL_API_TOKEN || '';
+const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...(API_TOKEN ? { 'X-AlphaCouncil-Token': API_TOKEN } : {}) });
 
 interface Stock { code: string; name: string; change_pct: number; volume: number; amount: number; }
 interface Kline { date: string; open: number; high: number; low: number; close: number; volume: number; amount: number; }
@@ -21,7 +23,7 @@ function normalizeWatchCode(input: string): string {
 
 async function dataApi(body: any) {
   const r = await fetch(`${API_BASE}/api/data`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: jsonHeaders(),
     body: JSON.stringify(body),
   });
   const j = await r.json();
@@ -206,7 +208,7 @@ const DbPanel: React.FC = () => {
     setLoading(true); setError('');
     try {
       const d = await fetch(`${API_BASE}/api/data`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'stocks', limit: 200 }),
       }).then(r => r.json());
       // API 返回 { success, data: { count, stocks: [{code, ...}] } } 或直接数组
@@ -238,7 +240,7 @@ const DbPanel: React.FC = () => {
     try {
       const d = await fetch(`${API_BASE}/api/data`, {
         method: 'POST', signal: ctrl.signal,
-        headers: { 'Content-Type': 'application/json' },
+        headers: jsonHeaders(),
         body: JSON.stringify({ action: 'klines', code: c, limit: 60 }),
       }).then(r => r.json());
       // API 返回 { success, data: { code, klines: [{d,o,h,l,c,v,amount}], count, dateRange } }
@@ -447,7 +449,6 @@ const DbPanel: React.FC = () => {
 // ── 实时行情面板 (每5秒轮询新浪) ──────────────────────────
 const RealtimePanel: React.FC = () => {
   const [quotes, setQuotes] = useState<Record<string, RTQuote>>({});
-  const [prevPrices, setPrevPrices] = useState<Record<string, number>>({});
   const [flash, setFlash] = useState<Record<string, 'up'|'dn'>>({});
   const [running, setRunning] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -525,7 +526,7 @@ const RealtimePanel: React.FC = () => {
     // 市场数据已统一到 Python 数据层, 不再走 /api/market (Node Sina)
     try {
       const r = await fetch(`${API_BASE}/api/data`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'realtime_prices', codes: watch }),
       }).then(r => r.json());
       if (r.success && r.data) {
@@ -726,7 +727,7 @@ const DataManagePanel: React.FC = () => {
   const pollProgress = useCallback(async () => {
     try {
       const r = await fetch(`${API_BASE}/api/sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'update_progress' }),
       }).then(r => r.json());
       if (r.success) setUpd(r.data);
@@ -736,7 +737,7 @@ const DataManagePanel: React.FC = () => {
   const pollDaemon = useCallback(async () => {
     try {
       const r = await fetch(`${API_BASE}/api/sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'daemon_status' }),
       }).then(r => r.json());
       if (r.success && r.data && r.data.trading) setDaemon(r.data);
@@ -754,7 +755,7 @@ const DataManagePanel: React.FC = () => {
     setBusy(true); setMsg('');
     try {
       const r = await fetch(`${API_BASE}/api/sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'start_update', mode }),
       }).then(r => r.json());
       if (r.success) {
@@ -770,7 +771,7 @@ const DataManagePanel: React.FC = () => {
   const stopUpdate = async () => {
     try {
       await fetch(`${API_BASE}/api/sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'stop_update' }),
       }).then(r => r.json());
       setMsg('已停止更新');
@@ -786,7 +787,7 @@ const DataManagePanel: React.FC = () => {
     if (next) {
       try {
         await fetch(`${API_BASE}/api/sync`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: jsonHeaders(),
           body: JSON.stringify({ action: 'start' }),
         });
       } catch { /* daemon 启动失败不阻塞 UI */ }
@@ -795,7 +796,7 @@ const DataManagePanel: React.FC = () => {
     } else {
       try {
         await fetch(`${API_BASE}/api/sync`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: jsonHeaders(),
           body: JSON.stringify({ action: 'stop' }),
         });
       } catch { /* 静默 */ }
@@ -807,7 +808,7 @@ const DataManagePanel: React.FC = () => {
   useEffect(() => {
     if (autoOn) {
       fetch(`${API_BASE}/api/sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: jsonHeaders(),
         body: JSON.stringify({ action: 'start' }),
       }).catch(() => {});
     }
@@ -843,7 +844,7 @@ const DataManagePanel: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Power style={{ width: 18, height: 18, color: autoOn ? '#22C55E' : '#64748B' }} />
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#E2E8F0' }}>自动实时同步</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#E2E8F0' }}>行情自动刷新</div>
               <div style={{ fontSize: 11, color: '#64748B' }}>
                 {daemon?.trading ? `交易时段 [${daemon.trading.session}] · ` : ''}
                 {daemon ? `${daemon.realtime_fresh ? '守护进程运行中' : '守护进程未运行'} · 监控${daemon.watch_count}只` : '查询中...'}
@@ -858,7 +859,7 @@ const DataManagePanel: React.FC = () => {
           </button>
         </div>
         <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
-          开启后：盘中每 10 秒自动刷新 200 只热门股实时报价，收盘后自动合并当日完整 K 线（不污染历史数据）。需在命令行运行 <code style={{ color: ACCENT }}>python -m quant.data.sync_service</code> 启动守护进程。
+          开启后：盘中每 10 秒自动刷新热门股实时报价，收盘后自动合并当日完整 K 线。<b style={{ color: '#64748B' }}>仅刷新行情数据，不触发任何交易</b>。需在命令行运行 <code style={{ color: ACCENT }}>python -m quant.data.sync_service</code> 启动守护进程。
         </div>
       </div>
 

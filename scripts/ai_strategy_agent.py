@@ -16,6 +16,7 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from quant.ai.promotion import apply_promotion_state
 from quant.data.cache import create_cache
 
 cache = create_cache()
@@ -176,6 +177,7 @@ def run_strategy_factory(provider: str = "glm") -> dict:
             "beats_baseline": beats_train and beats_val,
             "evaluated_at": _now(),
         }
+        entry = apply_promotion_state("strategy", entry, cache)
         results.append(entry)
 
         # 通过条件: 训练集 Sharpe+收益 均超基线, 且验证集 Sharpe 为正 (样本外不崩溃)
@@ -203,6 +205,7 @@ def get_status() -> dict:
     return {
         "candidates": cache.get("ai:strategy:candidates") or [],
         "approved": cache.get("ai:strategy:approved") or [],
+        "promotion": cache.get("ai:strategy:promotion") or {},
     }
 
 

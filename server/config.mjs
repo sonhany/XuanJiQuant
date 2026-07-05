@@ -21,9 +21,6 @@ export const MIME = {
   '.json': 'application/json', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
 
-// 服务器端口
-export const PORT = 3334;
-
 // 手动解析 .env
 const envPath = path.join(ROOT_DIR, '.env');
 if (fs.existsSync(envPath)) {
@@ -39,6 +36,13 @@ if (fs.existsSync(envPath)) {
     }
   }
 }
+
+// 服务器端口 / 主机。默认仅监听本机, 避免控制面暴露到局域网。
+export const PORT = Number(process.env.PORT || 3334);
+export const HOST = process.env.HOST || '127.0.0.1';
+export const API_TOKEN = process.env.ALPHACOUNCIL_API_TOKEN || '';
+export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3333,http://127.0.0.1:3333')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 export const JUHE_API_KEY = process.env.JUHE_API_KEY;
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;

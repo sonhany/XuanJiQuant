@@ -155,6 +155,11 @@ def run_data_agent(provider: str = "glm", auto_fix: bool = False) -> dict:
     integrity = check_data_integrity()
     replenish = generate_replenish_plan(integrity)
     market = collect_market_context()
+    try:
+        from quant.ai.shadow_signals import build_shadow_signals
+        shadow_signals = build_shadow_signals(cache, source="ai_data_agent")
+    except Exception:
+        shadow_signals = {"mode": "shadow_only", "signals": [], "can_trigger_order": False}
 
     # 自动补数执行
     replenish_result = None
@@ -201,6 +206,7 @@ def run_data_agent(provider: str = "glm", auto_fix: bool = False) -> dict:
         "replenish_plan": replenish,
         "replenish_result": replenish_result,
         "market_context": market,
+        "shadow_signals": shadow_signals,
         "data_stale": data_stale,
         "trade_allowed": trade_allowed,
         "ai_summary": ai_summary,
