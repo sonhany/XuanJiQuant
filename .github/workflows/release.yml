@@ -1,0 +1,89 @@
+name: Release
+
+# 触发方式：推送 v*.*.* 标签（推荐），或在 Actions 页面手动运行
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v1.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build portable package
+        run: |
+          mkdir -p build
+          zip -r -q "build/XuanJiQuant-${{ steps.ver.outputs.tag }}-portable.zip" . \
+            -x ".git/*" ".github/*" "node_modules/*" "dist/*" "build/*" \
+               "data/*" "logs/*" ".venv*/*" "mlruns/*" \
+               "archify/*" "graphify-out/*" "experiments/*" \
+               "docs/superpowers/*" "docs/plans/*" \
+               "Logo/*" "screenshots/*" "bigquant_comparison_analysis.md" \
+               ".workbuddy/*" ".zcode/*" ".superpowers/*" ".pytest_cache/*" \
+               "__pycache__/*" "*.pyc" "*.log" "*.pid"
+
+      - name: Checksum
+        run: |
+          cd build
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: XuanJiQuant ${{ steps.ver.outputs.tag }}
+          body: |
+            ## XuanJiQuant ${{ steps.ver.outputs.tag }}
+
+            A 股本机量化研究与**确定性模拟盘**工作台。
+            单机运行，**不连接实盘，不承诺收益**。
+
+            ### 安装
+
+            1. 下载下方 `XuanJiQuant-${{ steps.ver.outputs.tag }}-portable.zip` 并解压。
+            2. 双击 `setup.bat`（检查 Node/Python 并安装依赖）。
+            3. 双击 `start_all.bat`，或命令行执行 `node scripts/start_services.mjs`。
+
+            - Web：<http://127.0.0.1:8888>　·　API：<http://127.0.0.1:8880>
+            - 环境要求：Node.js 18+ / Python 3.10+ / Windows
+
+            ### 校验
+
+            下载后可用 `SHA256SUMS.txt` 核对压缩包完整性：
+
+            ```powershell
+            certutil -hashfile XuanJiQuant-${{ steps.ver.outputs.tag }}-portable.zip SHA256
+            ```
+
+            ### 说明
+
+            本包为**源码便携包**，不含 `node_modules` 与本地数据（`data/`、`logs/`），
+            首次启动需联网安装依赖。系统不连接券商，不含实盘交易能力。
+          files: |
+            build/*.zip
+            build/SHA256SUMS.txt
+          draft: false
+          prerelease: false
