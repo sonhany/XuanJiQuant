@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, BarChart3, Bot, ShieldCheck } from 'lucide-react';
-import xuanjiHorizontal from '../Logo/logo_horizontal.svg';
+import xuanjiHorizontal from '../public/branding/logo_horizontal.svg';
 
 const roles = [
   { key: 'paper-sandbox', label: '模拟盘操作员', note: '查看全部页面并操作模拟交易', icon: Bot },

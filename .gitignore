@@ -47,6 +47,15 @@ Thumbs.db
 .superpowers/
 mlruns/
 
+# Non-essential for release (kept on disk, not published to the repository)
+Logo/
+screenshots/
+docs/superpowers/
+docs/plans/
+docs/README_REFERENCE.md
+experiments/
+bigquant_comparison_analysis.md
+
 # Generated analysis artifacts (large, reproducible from source)
 archify/
 graphify-out/

@@ -1,6 +1,0 @@
-lean/bin/
-lean/obj/
-lean_engine/bin/
-lean_engine/obj/
-__pycache__/
-.pytest_cache/

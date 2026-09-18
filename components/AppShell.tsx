@@ -16,7 +16,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { roleCapabilities } from '../lib/workbench-state.mjs';
-import xuanjiSymbol from '../Logo/logo_symbol.svg';
+import xuanjiSymbol from '../public/branding/logo_symbol.svg';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
 
