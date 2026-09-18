@@ -23,7 +23,10 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           # OPENCODE_API_KEY 属 OpenCode Zen，必须用 opencode/ 前缀
-          model: opencode/claude-sonnet-4-5
+          # 免费模型，可选：opencode/big-pickle、opencode/mimo-v2.5-free、
+          # opencode/ling-3.0-flash-fin-free、opencode/nemotron-3-ultra-free、
+          # opencode/nemotron-3.5-lightning-free、opencode/muse-spark-1.3-contributor-free
+          model: opencode/big-pickle
           prompt: |
             审查这个 Pull Request：
 
