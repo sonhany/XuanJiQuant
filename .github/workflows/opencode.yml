@@ -1,0 +1,37 @@
+name: opencode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  opencode:
+    if: |
+      contains(github.event.comment.body, '/oc') ||
+      contains(github.event.comment.body, '/opencode')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          # 密钥在 Settings -> Secrets and variables -> Actions 中添加
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          # 格式为 provider/model；用 opencode.ai 的 key 也可填 opencode/ 开头的官方模型
+          model: anthropic/claude-sonnet-4-20250514
+          # share: true    # 公开仓库默认 true，不希望会话被公开分享则设为 false
+          # agent: build   # 可选，默认 build
+          # prompt: |      # 可选，覆盖默认行为
+          #   ...
+          # github_token: xxxx  # 可选，默认使用 opencode-agent App 的安装令牌
