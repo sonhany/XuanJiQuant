@@ -1,21 +1,15 @@
-"""全市场批量下载器 — K线 + 全量财务，支持断点续传
+﻿"""鍏ㄥ競鍦烘壒閲忎笅杞藉櫒 鈥?K绾?+ 鍏ㄩ噺璐㈠姟锛屾敮鎸佹柇鐐圭画浼?
+璁捐鐩爣: 鍏ˋ鑲?~5500鍙紝K绾胯繎1骞?+ 鍏ㄩ噺80椤硅储鍔°€?鎬昏€楁椂: K绾縹10鍒嗛挓 + 璐㈠姟~5灏忔椂銆?
+鍋ュ．鎬?
+  - 鏂偣缁紶: 姣忓彧瀹屾垚绔嬪嵆鍐欏簱锛岃褰曞埌 data/download_progress.json
+  - 闄愰€? 姣忓彧涔嬮棿 sleep锛岄伩鍏嶈鍙嶇埇灏佺
+  - 閲嶈瘯: 鍗曞彧澶辫触閲嶈瘯3娆?  - 杩涘害鍙: 姣?0鍙墦鍗拌繘搴︼紝鍙殢鏃?Ctrl+C 鍚庨噸璺戠画浼?  - 涓ら樁娈? --phase kline (蹇? / --phase financial (鎱? / --phase both
 
-设计目标: 全A股 ~5500只，K线近1年 + 全量80项财务。
-总耗时: K线~10分钟 + 财务~5小时。
-
-健壮性:
-  - 断点续传: 每只完成立即写库，记录到 data/download_progress.json
-  - 限速: 每只之间 sleep，避免被反爬封禁
-  - 重试: 单只失败重试3次
-  - 进度可见: 每50只打印进度，可随时 Ctrl+C 后重跑续传
-  - 两阶段: --phase kline (快) / --phase financial (慢) / --phase both
-
-用法:
-  python scripts/download_all.py --phase kline        # 仅K线(10分钟)
-  python scripts/download_all.py --phase financial    # 仅财务(5小时)
-  python scripts/download_all.py --phase both         # 全部
-  python scripts/download_all.py --phase kline --limit 100  # 测试用，只下100只
-  python scripts/download_all.py --resume             # 续传(默认就是续传)
+鐢ㄦ硶:
+  python scripts/download_all.py --phase kline        # 浠匥绾?10鍒嗛挓)
+  python scripts/download_all.py --phase financial    # 浠呰储鍔?5灏忔椂)
+  python scripts/download_all.py --phase both         # 鍏ㄩ儴
+  python scripts/download_all.py --phase kline --limit 100  # 娴嬭瘯鐢紝鍙笅100鍙?  python scripts/download_all.py --resume             # 缁紶(榛樿灏辨槸缁紶)
 """
 import argparse
 import json
@@ -38,11 +32,11 @@ logger = logging.getLogger("download_all")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROGRESS_FILE = os.path.join(ROOT, 'data', 'download_progress.json')
-KLINE_COUNT = 250  # 近1年约250个交易日
+KLINE_COUNT = 250  # 杩?骞寸害250涓氦鏄撴棩
 
 
 def load_progress() -> dict:
-    """加载进度文件 {kline_done: [...], financial_done: [...], started_at, ...}"""
+    """鍔犺浇杩涘害鏂囦欢 {kline_done: [...], financial_done: [...], started_at, ...}"""
     if os.path.exists(PROGRESS_FILE):
         try:
             with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
@@ -60,35 +54,35 @@ def save_progress(prog: dict):
 
 
 def get_full_universe() -> List[str]:
-    """获取全A股代码清单 (~5500只)"""
+    """鑾峰彇鍏ˋ鑲′唬鐮佹竻鍗?(~5500鍙?"""
     try:
         import akshare as ak
+        from quant.data.universe import filter_trade_universe_codes
         df = ak.stock_info_a_code_name()
         codes = df['code'].astype(str).tolist()
-        # 过滤: 只保留6位数字、剔除退市(ST带'退'字)
-        valid = [c for c in codes if len(c) == 6 and c.isdigit()]
-        logger.info(f"全A股清单: {len(valid)} 只 (过滤前 {len(codes)})")
+        # 杩囨护: 鍙繚鐣?浣嶆暟瀛椼€佸墧闄ら€€甯?ST甯?閫€'瀛?
+        valid = filter_trade_universe_codes(codes)
+        logger.info(f"A-share universe: {len(valid)} symbols (raw={len(codes)})")
         return valid
     except Exception as e:
-        logger.error(f"获取全A股清单失败，回退到内置种子: {e}")
+        logger.error(f"failed to fetch A-share universe, fallback to built-in seed: {e}")
         from quant.data.tencent_source import load_universe
-        return load_universe()
+        from quant.data.universe import filter_trade_universe_codes
+        return filter_trade_universe_codes(load_universe())
 
 
-# ═══════════════════════════════════════════════════════════
-#  阶段1: K线下载 (baostock 主力，~2小时；腾讯被封禁时备用)
-# ═══════════════════════════════════════════════════════════
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?#  闃舵1: K绾夸笅杞?(鑵捐璐㈢粡涓婚摼璺紱鏂版氮娆＄骇锛汢aostock 澶囩敤)
 def download_klines(codes: List[str], cache, done: set) -> dict:
-    """下载K线，返回 {ok, skip, err}
+    """涓嬭浇K绾匡紝杩斿洖 {ok, skip, err}
 
-    主力源 baostock (反爬宽松、含成交额)；腾讯作为单股快速备选。
-    """
+    涓诲姏婧愯吘璁储缁忥紱鏂版氮璐㈢粡浣滀负娆＄骇婧愶紱Baostock 浠呬綔涓哄鐢ㄥ厹搴曘€?    """
+    from quant.data.kline_reconciler import fetch_kline_dual
+    from quant.data.tencent_source import normalize_code
     from quant.data.baostock_source import fetch_klines as bs_fetch, logout
-    from quant.data.tencent_source import fetch_klines as tx_fetch, normalize_code
 
     todo = [c for c in codes if c not in done]
-    logger.info(f"=== K线阶段: {len(todo)} 只待下载 (已完成 {len(done)}) ===")
-    logger.info("  主力源: baostock (含成交额, 反爬宽松)")
+    logger.info(f"=== kline phase: pending={len(todo)} done={len(done)} ===")
+    logger.info("  source chain: TdxQuant primary, Tencent cross-check, Baostock fallback")
 
     ok = err = 0
     t0 = time.time()
@@ -96,22 +90,22 @@ def download_klines(codes: List[str], cache, done: set) -> dict:
         for i, code in enumerate(todo, 1):
             code = normalize_code(code)
             bars = None
-            # baostock 重试2次
+            # TdxQuant primary, Tencent daily cross-check, Baostock final fallback.
             for attempt in range(2):
                 try:
-                    bars = bs_fetch(code, count=KLINE_COUNT)
+                    checked = fetch_kline_dual(code, count=KLINE_COUNT, period="1d")
+                    bars = checked.get("bars") if checked.get("ok") else []
                     if bars:
                         break
                 except Exception as e:
                     if attempt == 1:
-                        logger.debug(f"[{code}] baostock失败: {e}")
+                        logger.debug(f"[{code}] tdx/tencent failed: {e}")
                     time.sleep(0.5)
-            # baostock 失败则试腾讯(单只腾讯通常还能用)
             if not bars:
                 try:
-                    bars = tx_fetch(code, count=KLINE_COUNT)
-                except Exception:
-                    pass
+                    bars = bs_fetch(code, count=KLINE_COUNT)
+                except Exception as e:
+                    logger.debug(f"[{code}] baostock fallback failed: {e}")
             if bars:
                 cache.set(f'kline:{code}:d', bars)
                 done.add(code)
@@ -119,91 +113,97 @@ def download_klines(codes: List[str], cache, done: set) -> dict:
             else:
                 err += 1
 
-            # 进度日志 + 持久化 (每50只)
+            # 杩涘害鏃ュ織 + 鎸佷箙鍖?(姣?0鍙?
             if i % 50 == 0 or i == len(todo):
                 elapsed = time.time() - t0
                 rate = i / elapsed if elapsed > 0 else 0
                 eta = (len(todo) - i) / rate / 60 if rate > 0 else 0
-                logger.info(f"  K线 [{i}/{len(todo)}] ok={ok} err={err} "
-                            f"({rate:.2f}/s, ETA {eta:.0f}分)")
+                logger.info(f"  kline [{i}/{len(todo)}] ok={ok} err={err} "
+                            f"({rate:.2f}/s, ETA {eta:.0f} min)")
                 prog = load_progress()
                 prog['kline_done'] = sorted(done)
                 save_progress(prog)
 
-            time.sleep(0.1)  # baostock 礼貌限速
+            time.sleep(0.1)
     finally:
-        logout()  # 确保退出 baostock 登录
+        logout()  # 纭繚閫€鍑?baostock 鐧诲綍
 
     elapsed = time.time() - t0
-    logger.info(f"K线阶段完成: ok={ok} err={err}, {elapsed/60:.1f}分钟")
+    logger.info(f"kline phase finished: ok={ok} err={err}, {elapsed/60:.1f} min")
     return {'ok': ok, 'err': err}
 
 
-# ═══════════════════════════════════════════════════════════
-#  阶段2: 财务下载 (慢，~5小时)
-# ═══════════════════════════════════════════════════════════
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?#  闃舵2: 璐㈠姟涓嬭浇 (鎱紝~5灏忔椂)
 def download_financials(codes: List[str], cache, done: set) -> dict:
-    """下载全量80项财务数据，返回 {ok, skip, err}"""
-    from quant.data.akshare_source import fetch_financial_abstract
+    """涓嬭浇鍏ㄩ噺80椤硅储鍔℃暟鎹紝杩斿洖 {ok, skip, err}"""
+    from quant.data.financial_reconciler import fetch_financial_crosscheck
 
     todo = [c for c in codes if c not in done]
-    logger.info(f"=== 财务阶段: {len(todo)} 只待下载 (已完成 {len(done)}) ===")
+    logger.info(f"=== financial phase: pending={len(todo)} done={len(done)} ===")
 
     ok = skip = err = 0
     t0 = time.time()
     for i, code in enumerate(todo, 1):
         code = str(code).split('.')[0]
-        # 重试3次
+        # Retry each symbol a few times.
         success = False
         for attempt in range(3):
             try:
-                df = fetch_financial_abstract(code)  # 全量80项
-                if df is None or df.empty:
+                result = fetch_financial_crosscheck(code)
+                if not result.get("ok"):
                     skip += 1
                     break
-                cache.set(f'fin:abstract:{code}', df.to_dict(orient='records'))
+                cache.set(f'fin:crosscheck:{code}', result)
+                if result.get("akshare_records"):
+                    cache.set(f'fin:abstract:{code}', result["akshare_records"])
+                else:
+                    cache.set(f'fin:abstract:{code}', [result.get("merged") or {}])
+                if result.get("tdx_raw"):
+                    cache.set(f'fin:tdx:{code}', result["tdx_raw"])
+                if result.get("tushare_records"):
+                    cache.set(f'fin:tushare:{code}', result["tushare_records"])
                 done.add(code)
                 success = True
                 break
             except Exception as e:
                 if attempt == 2:
-                    logger.debug(f"[{code}] 财务失败: {e}")
+                    logger.debug(f"[{code}] financial failed: {e}")
                 time.sleep(1.0)
         if success:
             ok += 1
-        elif not (skip > ok + err):  # 已计skip的不再计err
+        elif not (skip > ok + err):  # 宸茶skip鐨勪笉鍐嶈err
             if not success:
-                # 判断是否被skip分支处理
+                # 鍒ゆ柇鏄惁琚玸kip鍒嗘敮澶勭悊
                 pass
 
-        # 进度日志 + 持久化
+        # Progress log and checkpoint.
         if i % 20 == 0 or i == len(todo):
             elapsed = time.time() - t0
             rate = i / elapsed if elapsed > 0 else 0
             eta = (len(todo) - i) / rate / 60 if rate > 0 else 0
-            logger.info(f"  财务 [{i}/{len(todo)}] ok={ok} skip={skip} err={err} "
-                        f"({rate:.2f}/s, ETA {eta:.0f}分)")
+            logger.info(f"  financial [{i}/{len(todo)}] ok={ok} skip={skip} err={err} "
+                        f"({rate:.2f}/s, ETA {eta:.0f} min)")
             prog = load_progress()
             prog['financial_done'] = sorted(done)
             save_progress(prog)
 
-        time.sleep(0.3)  # 财务接口更严格，限速更保守
+        time.sleep(0.3)  # 璐㈠姟鎺ュ彛鏇翠弗鏍硷紝闄愰€熸洿淇濆畧
 
     elapsed = time.time() - t0
-    logger.info(f"财务阶段完成: ok={ok} skip={skip} err={err}, {elapsed/60:.1f}分钟")
+    logger.info(f"financial phase finished: ok={ok} skip={skip} err={err}, {elapsed/60:.1f} min")
     return {'ok': ok, 'skip': skip, 'err': err}
 
 
 def main():
-    ap = argparse.ArgumentParser(description='全市场批量下载 (K线+财务, 断点续传)')
+    ap = argparse.ArgumentParser(description='鍏ㄥ競鍦烘壒閲忎笅杞?(K绾?璐㈠姟, 鏂偣缁紶)')
     ap.add_argument('--phase', choices=['kline', 'financial', 'both'], default='both',
-                    help='下载阶段: kline(快) / financial(慢) / both(默认)')
-    ap.add_argument('--limit', type=int, default=0, help='限制下载数量(0=全部, 测试用)')
-    ap.add_argument('--codes', type=str, default='', help='自定义代码列表(逗号分隔)')
-    ap.add_argument('--fresh', action='store_true', help='忽略进度，重新下载(危险)')
+                    help='涓嬭浇闃舵: kline(蹇? / financial(鎱? / both(榛樿)')
+    ap.add_argument('--limit', type=int, default=0, help='闄愬埗涓嬭浇鏁伴噺(0=鍏ㄩ儴, 娴嬭瘯鐢?')
+    ap.add_argument('--codes', type=str, default='', help='鑷畾涔変唬鐮佸垪琛?閫楀彿鍒嗛殧)')
+    ap.add_argument('--fresh', action='store_true', help='蹇界暐杩涘害锛岄噸鏂颁笅杞?鍗遍櫓)')
     args = ap.parse_args()
 
-    # 1. 确定股票池
+    # 1. Determine stock universe.
     if args.codes:
         codes = [c.strip() for c in args.codes.split(',') if c.strip()]
         codes = [c for c in codes if len(c) == 6 and c.isdigit()]
@@ -211,9 +211,9 @@ def main():
         codes = get_full_universe()
     if args.limit > 0:
         codes = codes[:args.limit]
-    logger.info(f"目标股票: {len(codes)} 只")
+    logger.info(f"target stocks: {len(codes)}")
 
-    # 2. 加载/初始化进度
+    # 2. Load or initialize progress.
     prog = load_progress()
     if args.fresh or not prog.get('started_at'):
         prog = {'kline_done': [], 'financial_done': [], 'universe': codes,
@@ -221,13 +221,13 @@ def main():
         save_progress(prog)
     kline_done = set(prog.get('kline_done', []))
     fin_done = set(prog.get('financial_done', []))
-    logger.info(f"已完成: K线 {len(kline_done)} / 财务 {len(fin_done)}")
+    logger.info(f"completed: kline={len(kline_done)} financial={len(fin_done)}")
 
-    # 3. 写入股票池+名称到缓存(供前端使用)
+    # 3. 鍐欏叆鑲＄エ姹?鍚嶇О鍒扮紦瀛?渚涘墠绔娇鐢?
     cache = create_cache()
     cache.set('stock:universe', codes)
 
-    # 4. 执行下载
+    # 4. 鎵ц涓嬭浇
     results = {}
     if args.phase in ('kline', 'both'):
         results['kline'] = download_klines(codes, cache, kline_done)
@@ -235,20 +235,21 @@ def main():
     if args.phase in ('financial', 'both'):
         results['financial'] = download_financials(codes, cache, fin_done)
 
-    # 5. 汇总
+    # 5. Summary.
     logger.info("=" * 55)
-    logger.info("下载完成!")
+    logger.info("download finished")
     kline_keys = len(cache.keys('kline:*:d'))
     fin_keys = len(cache.keys('fin:abstract:*'))
-    logger.info(f"  K线: {kline_keys} 只")
-    logger.info(f"  财务: {fin_keys} 只")
-    logger.info(f"  总缓存键: {cache.size()}")
+    logger.info(f"  kline: {kline_keys} stocks")
+    logger.info(f"  financial: {fin_keys} stocks")
+    logger.info(f"  cache keys: {cache.size()}")
     import os as _os
     db = os.path.join(ROOT, 'data', 'quant.db')
     if _os.path.exists(db):
-        logger.info(f"  数据库: {_os.path.getsize(db)/1024/1024:.1f} MB")
+        logger.info(f"  database: {_os.path.getsize(db)/1024/1024:.1f} MB")
     logger.info("=" * 55)
 
 
 if __name__ == '__main__':
     main()
+

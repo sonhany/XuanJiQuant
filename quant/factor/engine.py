@@ -133,6 +133,12 @@ class FactorEngine:
                 for col in _FF:
                     if col not in df.columns:
                         df[col] = _np.nan
+        try:
+            from .dynamic_factor_loader import compute_dynamic_factors, is_dynamic_factor_enabled
+            if is_dynamic_factor_enabled(self._cache):
+                df = compute_dynamic_factors(df, self._cache)
+        except Exception as e:
+            logger.debug(f"compute_dynamic_factors failed (non-fatal): {e}")
         return df
 
     def compute_one(self, df: pd.DataFrame, factor_name: str, code: str = None) -> pd.Series:
@@ -146,6 +152,14 @@ class FactorEngine:
             fdf = compute_fundamental(df, code or '', self._cache)
             return fdf[factor_name] if factor_name in fdf.columns else pd.Series(dtype=float)
         else:
+            try:
+                from .dynamic_factor_loader import compute_dynamic_factor, is_dynamic_factor_enabled
+                if is_dynamic_factor_enabled(self._cache):
+                    series = compute_dynamic_factor(df.copy(), factor_name, self._cache)
+                    if series is not None:
+                        return series
+            except Exception as e:
+                logger.debug(f"compute_dynamic_factor {factor_name} failed (non-fatal): {e}")
             raise ValueError(f"Unknown factor: {factor_name}")
 
     # ── 多股批量 ──────────────────────────────────────
@@ -188,6 +202,8 @@ class FactorEngine:
                         fwd_horizons: List[int] = [1, 5, 10, 20]) -> dict:
         """评估单个因子的 IC
 
+        复用 evaluate_all 的向量化横截面逻辑 (按 date+code 正确对齐)。
+
         Args:
             multi_factor: {code: factor_df} (包含 factor_name 列)
             multi_klines: {code: klines_df} (用于计算 fwd_returns)
@@ -197,65 +213,17 @@ class FactorEngine:
         Returns:
             dict {factor_name, summary (1d), decay ({h: summary}), n_stocks}
         """
-        # 收集所有股票的 (date, factor, fwd_ret) 拼接成长表
-        long_rows = []
-        for code, fdf in multi_factor.items():
-            if code not in multi_klines:
-                continue
-            kdf = multi_klines[code]
-            if 'date' not in fdf.columns or 'date' not in kdf.columns:
-                continue
-            # 找到下期收益 (用 kdf 排序)
-            kdf_sorted = kdf.sort_values('date').reset_index(drop=True)
-            fdf_sorted = fdf.sort_values('date').reset_index(drop=True)
-            # 取因子名
-            if factor_name not in fdf_sorted.columns:
-                continue
-            # 合并
-            merged = pd.DataFrame({
-                'date': fdf_sorted['date'],
-                'factor': pd.to_numeric(fdf_sorted[factor_name], errors='coerce'),
-            })
-            # 算每个日期的 1d fwd return
-            kdf_sorted['fwd_ret_1'] = kdf_sorted['close'].pct_change().shift(-1)
-            for h in fwd_horizons:
-                col = f'fwd_ret_{h}'
-                kdf_sorted[col] = kdf_sorted['close'].pct_change(h).shift(-h)
-            # merge back
-            merged = merged.merge(
-                kdf_sorted[['date'] + [f'fwd_ret_{h}' for h in fwd_horizons]],
-                on='date', how='left'
-            )
-            merged['code'] = code
-            long_rows.append(merged)
-        if not long_rows:
-            return {"factor_name": factor_name, "summary": None, "decay": {}, "n_stocks": 0}
-        long_df = pd.concat(long_rows, ignore_index=True)
-
-        # 1d summary
-        ic_s_1d = compute_ic_series(
-            long_df.rename(columns={'factor': factor_name}),
-            long_df.rename(columns={'fwd_ret_1': 'fwd_ret'}),
-            factor_name, fwd_col='fwd_ret', date_col='date'
+        results = self.evaluate_all(
+            multi_factor, multi_klines,
+            factor_names=[factor_name],
+            fwd_horizons=fwd_horizons,
         )
-        summary_1d = ic_summary(ic_s_1d)
-
-        # decay
-        decay = {}
-        for h in fwd_horizons:
-            ic_s_h = compute_ic_series(
-                long_df.rename(columns={'factor': factor_name}),
-                long_df.rename(columns={f'fwd_ret_{h}': 'fwd_ret'}),
-                factor_name, fwd_col='fwd_ret', date_col='date'
-            )
-            decay[f"{h}d"] = ic_summary(ic_s_h)
-
-        return {
-            "factor_name": factor_name,
-            "summary": summary_1d,
-            "decay": decay,
-            "n_stocks": len(multi_factor),
-        }
+        if not results:
+            return {"factor_name": factor_name, "summary": None, "decay": {}, "n_stocks": len(multi_factor)}
+        item = results[0]
+        # 兼容旧格式: evaluate_all 返回 decay 的 key 是 "1d"/"5d"/...
+        # evaluate_factor 期望的也是 "1d"/"5d"/...
+        return item
 
     def evaluate_all(self, multi_factor: Dict[str, pd.DataFrame],
                      multi_klines: Dict[str, pd.DataFrame],
@@ -393,25 +361,31 @@ class FactorEngine:
             fwd_col = f'fwd_{h}'
             long_df[fwd_col] = pd.to_numeric(long_df[fwd_col], errors='coerce')
             for date, grp in long_df.groupby('date'):
-                fwd_vals = grp[fwd_col].to_numpy(dtype=float)
-                fwd_valid = ~np.isnan(fwd_vals)
-                if fwd_vals.size < 3:
+                cols = valid_factor_cols + [fwd_col]
+                sub = grp[cols].copy()
+                sub = sub.dropna(subset=[fwd_col])
+                if len(sub) < 3:
                     continue
-                # 前向收益的秩 (当日所有股票共用)
-                fwd_ranks = _rank_1d(fwd_vals)
-                for col in valid_factor_cols:
-                    fv = grp[col].to_numpy(dtype=float)
-                    valid = (~np.isnan(fv)) & fwd_valid
-                    n = int(valid.sum())
-                    if n < 2:
-                        continue
-                    fv_v = fv[valid]
-                    fr_v = fwd_ranks[valid]
-                    if np.std(fv_v) < 1e-10 or np.std(fr_v) < 1e-10:
-                        continue
-                    # 向量化 Spearman: 两个秩向量的 Pearson 相关
-                    f_ranks = _rank_1d(fv_v)
-                    rc = _pearson(f_ranks, fr_v)
+                ranks = sub.rank(method='average')
+                x = ranks[valid_factor_cols].to_numpy(dtype=float, copy=False)
+                y = ranks[fwd_col].to_numpy(dtype=float, copy=False)
+                mask = np.isfinite(x) & np.isfinite(y[:, None])
+                cnt = mask.sum(axis=0).astype(float)
+                usable = cnt >= 3
+                if not usable.any():
+                    continue
+
+                x0 = np.where(mask, x, 0.0)
+                y2 = y[:, None]
+                y0 = np.where(mask, y2, 0.0)
+                x_mean = np.divide(x0.sum(axis=0), cnt, out=np.zeros_like(cnt), where=cnt > 0)
+                y_mean = np.divide(y0.sum(axis=0), cnt, out=np.zeros_like(cnt), where=cnt > 0)
+                dx = np.where(mask, x - x_mean, 0.0)
+                dy = np.where(mask, y2 - y_mean, 0.0)
+                num = (dx * dy).sum(axis=0)
+                den = np.sqrt((dx * dx).sum(axis=0) * (dy * dy).sum(axis=0))
+                rc_values = np.divide(num, den, out=np.full_like(num, np.nan), where=(usable & (den > 1e-12)))
+                for col, rc in zip(valid_factor_cols, rc_values):
                     if not (np.isnan(rc) or np.isinf(rc)):
                         horizon_ic[h].setdefault(col, []).append(float(rc))
 
@@ -453,6 +427,68 @@ class FactorEngine:
         return out
 
     # ── 缓存 ──────────────────────────────────────────
+    def evaluate_factor_segments(self, multi_factor: Dict[str, pd.DataFrame],
+                                 multi_klines: Dict[str, pd.DataFrame],
+                                 factor_name: str,
+                                 fwd_horizons: List[int] = [1, 5, 10, 20],
+                                 splits: tuple[float, float, float] = (0.6, 0.2, 0.2)) -> dict:
+        """Qlib-style train/valid/test factor evaluation."""
+        dates = sorted({
+            str(d)
+            for df in (multi_factor or {}).values()
+            if df is not None and "date" in df.columns
+            for d in df["date"].dropna().astype(str).tolist()
+        })
+        empty = {"summary": None, "decay": {}, "date_range": [None, None], "n_dates": 0}
+        if not dates:
+            return {"factor_name": factor_name, "segments": {
+                "train": dict(empty), "valid": dict(empty), "test": dict(empty), "all": dict(empty)
+            }}
+
+        n = len(dates)
+        train_n = max(1, int(n * splits[0]))
+        valid_n = max(1, int(n * splits[1])) if n - train_n > 1 else 0
+        if train_n + valid_n >= n and n > 1:
+            valid_n = max(0, n - train_n - 1)
+        ranges = {
+            "train": dates[:train_n],
+            "valid": dates[train_n:train_n + valid_n],
+            "test": dates[train_n + valid_n:],
+            "all": dates,
+        }
+
+        def _filter(data: Dict[str, pd.DataFrame], allowed: set[str]) -> Dict[str, pd.DataFrame]:
+            out: Dict[str, pd.DataFrame] = {}
+            for code, df in (data or {}).items():
+                if df is None or "date" not in df.columns:
+                    continue
+                sub = df[df["date"].astype(str).isin(allowed)].copy()
+                if not sub.empty:
+                    out[code] = sub
+            return out
+
+        segments = {}
+        for name, seg_dates in ranges.items():
+            allowed = set(seg_dates)
+            if not seg_dates:
+                segments[name] = dict(empty)
+                continue
+            result = self.evaluate_factor(
+                _filter(multi_factor, allowed),
+                _filter(multi_klines, allowed),
+                factor_name,
+                fwd_horizons=fwd_horizons,
+            )
+            segments[name] = {
+                "summary": result.get("summary"),
+                "decay": result.get("decay", {}),
+                "date_range": [seg_dates[0], seg_dates[-1]],
+                "n_dates": len(seg_dates),
+                "n_stocks": result.get("n_stocks", 0),
+            }
+
+        return {"factor_name": factor_name, "segments": segments}
+
     def _cache_factors(self, code: str, factor_df: pd.DataFrame,
                        ttl: Optional[int] = None):
         """写因子到 Redis (key: factor:{code})"""
@@ -474,7 +510,17 @@ class FactorEngine:
 
     # ── 工具方法 ──────────────────────────────────────
     def list_factors(self) -> List[str]:
-        return list(ALL_FACTORS)
+        factors = list(ALL_FACTORS)
+        try:
+            from .dynamic_factor_loader import get_approved_factors, is_dynamic_factor_enabled
+            if is_dynamic_factor_enabled(self._cache):
+                for item in get_approved_factors(self._cache)[:10]:
+                    name = item.get("name")
+                    if name and name not in factors:
+                        factors.append(name)
+        except Exception:
+            pass
+        return factors
 
     def list_categories(self) -> dict:
         return FACTOR_CATEGORIES
@@ -482,7 +528,7 @@ class FactorEngine:
     def factor_meta(self) -> dict:
         """返回所有因子的元信息 (类别/数量/列表)"""
         return {
-            "total": len(ALL_FACTORS),
+            "total": len(self.list_factors()),
             "categories": [
                 {
                     "id": "technical",
@@ -501,6 +547,12 @@ class FactorEngine:
                     "name": "基本面因子",
                     "count": len(FUNDAMENTAL_FACTORS),
                     "factors": FUNDAMENTAL_FACTORS,
+                },
+                {
+                    "id": "ai",
+                    "name": "AI factors",
+                    "count": max(0, len(self.list_factors()) - len(ALL_FACTORS)),
+                    "factors": [f for f in self.list_factors() if f not in ALL_FACTORS],
                 },
             ]
         }

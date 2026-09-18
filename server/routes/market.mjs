@@ -1,53 +1,59 @@
 /**
- * 市场行情路由 — 已统一代理到 Python 数据层 (data_runner.py)
+ * Market data route.
  *
- * 数据层统一后, 本路由不再有自己的抓取代码:
- *   - 所有行情数据走 data_runner (PersistentRunner) → market_data.py
- *   - 保留路由兼容 (顶栏 LiveIndexBar / 旧调用方仍可用 /api/market)
- *   - 已删除 Node 侧 Sina fetcher (fetchSinaPrices) 和 data-source.js 依赖
- *
- * GET  /api/market/indices          — 顶栏指数 (代理 data_runner {action:'realtime_prices'})
- * POST /api/market {action}         — realtime_prices / sector_flow / northbound (代理 data_runner)
+ * GET  /api/market/indices returns top-bar index quotes.
+ * POST /api/market proxies market actions to data_runner.py.
  */
 import { PersistentRunner } from '../persistent_runner.mjs';
 import { json, readBody } from '../http-utils.mjs';
 
-// 复用 data.mjs 的同一个 data_runner 实例 (单例, 避免起两个 Python 进程)
-// 注: PersistentRunner 内部按 scriptName 去重, 同名只起一个进程
-const runner = new PersistentRunner('data_runner.py');
-runner.ensure();
+const runner = new PersistentRunner('data_runner.py', 'market-indices');
 
-export async function handleRealtimeIndices(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'application/json');
+const INDICES = [
+  { name: '上证指数', code: 'sh000001' },
+  { name: '深证成指', code: 'sz399001' },
+  { name: '创业板', code: 'sz399006' },
+  { name: '沪深300', code: 'sh000300' },
+  { name: '中证500', code: 'sh000905' },
+  { name: '科创50', code: 'sh000688' },
+];
 
-  if (req.method === 'OPTIONS') { res.end(); return; }
+const INDICES_CACHE_TTL_MS = Number(process.env.XUANJI_INDICES_CACHE_TTL_MS || 3000);
+let indicesCache = null;
+let indicesCacheAt = 0;
+let indicesInflight = null;
 
-  // POST: realtime_prices / sector_flow / northbound — 全部代理 data_runner
-  if (req.method === 'POST') {
-    const body = await readBody(req);
-    const parsed = body && typeof body === 'object' ? body : {};
-    try {
-      const data = await runner.call(parsed, 15000);
-      return json(res, 200, data);
-    } catch (e) {
-      return json(res, 500, { success: false, error: e.message });
-    }
+function fallbackIndices() {
+  return INDICES.map(idx => ({
+    ...idx,
+    price: 0,
+    open: 0,
+    close: 0,
+    high: 0,
+    low: 0,
+    volume: 0,
+    amount: 0,
+    chg_pct: 0,
+    time: '',
+    source: 'fallback',
+    amount_source: '',
+    volume_unit: '',
+    stale: true,
+  }));
+}
+
+async function loadRealtimeIndices() {
+  const now = Date.now();
+  if (indicesCache && now - indicesCacheAt < INDICES_CACHE_TTL_MS) {
+    return indicesCache;
+  }
+  if (indicesInflight) {
+    return indicesInflight;
   }
 
-  // GET /api/market/indices — 顶栏 LiveIndexBar 用
-  // 代理到 data_runner {action:'realtime_prices', codes: [A股大盘指数]}
-  if (req.method === 'GET') {
-    const INDICES = [
-      { name: '上证指数', code: 'sh000001' },
-      { name: '深证成指', code: 'sz399001' },
-      { name: '创业板', code: 'sz399006' },
-      { name: '沪深300', code: 'sh000300' },
-      { name: '中证500', code: 'sh000905' },
-      { name: '科创50', code: 'sh000688' },
-    ];
-    try {
-      const rt = await runner.call({ action: 'realtime_prices', codes: INDICES.map(i => i.code) }, 10000);
+  indicesInflight = runner
+    .call({ action: 'realtime_prices', codes: INDICES.map(i => i.code), force_refresh: true }, 10000)
+    .then((rt) => {
       const rtData = (rt && rt.success && rt.data) ? rt.data : {};
       const data = INDICES.map(idx => {
         const q = rtData[idx.code] || {};
@@ -63,11 +69,92 @@ export async function handleRealtimeIndices(req, res) {
           amount: q.amount || 0,
           chg_pct: q.chg_pct || 0,
           time: q.time || '',
+          source: q.source || '',
+          amount_source: q.amount_source || '',
+          volume_unit: q.volume_unit || '',
         };
       });
-      return json(res, 200, { success: true, data });
+      indicesCache = data;
+      indicesCacheAt = Date.now();
+      return data;
+    })
+    .finally(() => {
+      indicesInflight = null;
+    });
+
+  return indicesInflight;
+}
+
+function scheduleRealtimeIndicesRefresh() {
+  if (indicesInflight) return false;
+  indicesInflight = runner
+    .call({ action: 'realtime_prices', codes: INDICES.map(i => i.code), force_refresh: true }, 10000)
+    .then((rt) => {
+      const rtData = (rt && rt.success && rt.data) ? rt.data : {};
+      const data = INDICES.map(idx => {
+        const q = rtData[idx.code] || {};
+        return {
+          ...idx,
+          name: q.name || idx.name,
+          price: q.price || 0,
+          open: q.open || 0,
+          close: q.close || 0,
+          high: q.high || 0,
+          low: q.low || 0,
+          volume: q.volume || 0,
+          amount: q.amount || 0,
+          chg_pct: q.chg_pct || 0,
+          time: q.time || '',
+          source: q.source || '',
+          amount_source: q.amount_source || '',
+          volume_unit: q.volume_unit || '',
+        };
+      });
+      indicesCache = data;
+      indicesCacheAt = Date.now();
+      return data;
+    })
+    .catch(() => indicesCache || fallbackIndices())
+    .finally(() => {
+      indicesInflight = null;
+    });
+  return true;
+}
+
+export async function handleRealtimeIndices(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+
+  if (req.method === 'OPTIONS') {
+    res.end();
+    return;
+  }
+
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    const parsed = body && typeof body === 'object' ? body : {};
+    try {
+      const data = await runner.call(parsed, 15000);
+      return json(res, 200, data);
     } catch (e) {
       return json(res, 500, { success: false, error: e.message });
+    }
+  }
+
+  if (req.method === 'GET') {
+    try {
+      const now = Date.now();
+      if (indicesCache && now - indicesCacheAt < INDICES_CACHE_TTL_MS) {
+        return json(res, 200, { success: true, data: indicesCache });
+      }
+      const refreshScheduled = scheduleRealtimeIndicesRefresh();
+      if (indicesCache) {
+        return json(res, 200, { success: true, data: indicesCache, stale: true, refreshing: true });
+      }
+      return json(res, 200, { success: true, data: fallbackIndices(), stale: true, refreshing: refreshScheduled });
+    } catch (e) {
+      const data = indicesCache || fallbackIndices();
+      return json(res, 200, { success: true, data, warning: e.message });
     }
   }
 

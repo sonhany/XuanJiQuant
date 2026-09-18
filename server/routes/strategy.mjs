@@ -6,7 +6,7 @@ import { PersistentRunner } from '../persistent_runner.mjs';
 import { log, json, readBody } from '../http-utils.mjs';
 
 const runner = new PersistentRunner('strategy_runner.py');
-runner.ensure();
+runner.prewarm();
 
 export async function handleStrategy(req, res) {
   const body = await readBody(req);

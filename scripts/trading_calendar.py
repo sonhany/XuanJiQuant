@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -28,13 +29,28 @@ cache = create_cache()
 
 CALENDAR_KEY = "calendar:trade_dates"
 BUILT_AT_KEY = "calendar:built_at"
+_CALENDAR_CHECKED_AT = 0.0
+_CALENDAR_CHECK_INTERVAL_SEC = 300
+
+
+def _spread_sample(values: List[str], limit: int) -> List[str]:
+    """Sample the complete ordered key space instead of a biased prefix."""
+    rows = list(values)
+    if len(rows) <= limit:
+        return rows
+    if limit <= 1:
+        return [rows[-1]]
+    last = len(rows) - 1
+    indexes = {round(index * last / (limit - 1)) for index in range(limit)}
+    return [rows[index] for index in sorted(indexes)]
 
 
 def _scan_latest_kline_date() -> str:
     """直接扫描 K线缓存拿最新日期 (避免循环依赖 data_freshness)。"""
     try:
         latest = ""
-        for k in cache.keys("kline:*:d")[:50]:  # 采样前50只
+        keys = cache.keys("kline:*:d")
+        for k in _spread_sample(keys, 128):
             raw = cache.get(k)
             if raw and isinstance(raw, list) and raw:
                 d = str(raw[-1].get("date") or raw[-1].get("d") or "")
@@ -58,11 +74,16 @@ def build_trading_calendar(force: bool = False) -> List[str]:
                 logger.info(f"日历落后于K线 (cal={existing[-1]} < kline={kline_latest}), 自动重建")
                 force = True
 
-    date_set = set()
+    existing_dates = cache.get(CALENDAR_KEY)
+    date_set = {
+        str(value)
+        for value in (existing_dates if isinstance(existing_dates, list) else [])
+        if len(str(value)) == 8 and str(value).isdigit()
+    }
     try:
         keys = cache.keys("kline:*:d")
-        # 采样前500只(足够覆盖近2年所有交易日)
-        for k in keys[:500]:
+        # 均匀覆盖完整键空间，避免键排序让前缀样本长期停在旧日期。
+        for k in _spread_sample(keys, 500):
             raw = cache.get(k)
             if raw and isinstance(raw, list):
                 for bar in raw:
@@ -82,9 +103,16 @@ def build_trading_calendar(force: bool = False) -> List[str]:
 
 def get_trade_dates() -> List[str]:
     """获取交易日列表，不存在则自动构建。"""
+    global _CALENDAR_CHECKED_AT
     dates = cache.get(CALENDAR_KEY)
     if not dates or not isinstance(dates, list) or len(dates) < 10:
         dates = build_trading_calendar(force=True)
+        _CALENDAR_CHECKED_AT = time.monotonic()
+    elif time.monotonic() - _CALENDAR_CHECKED_AT >= _CALENDAR_CHECK_INTERVAL_SEC:
+        _CALENDAR_CHECKED_AT = time.monotonic()
+        kline_latest = _scan_latest_kline_date()
+        if kline_latest and kline_latest > dates[-1]:
+            dates = build_trading_calendar(force=True)
     return dates if dates else []
 
 

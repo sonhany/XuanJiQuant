@@ -10,12 +10,13 @@
 Alert Levels: info / warning / critical
 Alert States:  active / acknowledged / resolved / silenced
 """
-import sys, json, os, time, logging
+import sys, json, os, time, logging, re
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from quant.data.cache import create_cache
+from quant.paper_execution.runtime import load_active_account_projection
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("alerts")
@@ -117,6 +118,18 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def is_test_alert(alert: object) -> bool:
+    if not isinstance(alert, dict):
+        return False
+    if str(alert.get("rule_id") or "").lower() == "test":
+        return True
+    text = " ".join(
+        str(alert.get(field) or "")
+        for field in ("title", "message", "source", "category", "rule_id")
+    ).lower()
+    return re.search(r"test|contract|smoke|demo", text) is not None
+
+
 def _uid(prefix: str = "A") -> str:
     cnt_raw = cache.get(COUNTER_KEY) or 0
     cnt = int(cnt_raw) + 1
@@ -135,27 +148,18 @@ def _get_health() -> Optional[dict]:
 
 def _get_positions() -> List[dict]:
     try:
-        exec_state = cache.get("execution:state") or {}
-        return exec_state.get("positions", {})
+        return list(load_active_account_projection().get("positions") or [])
     except Exception:
         return []
 
 
 def _get_exec_status() -> dict:
     try:
-        exec_state = cache.get("execution:state") or {}
-        total_mv = sum(
-            p.get("quantity", 0) * p.get("current_price", 0)
-            for p in exec_state.get("positions", {}).values()
-        )
-        total_eq = exec_state.get("cash", 0) + total_mv
-        init = exec_state.get("initial_capital", 1_000_000)
+        projection = load_active_account_projection()
         return {
-            "cash": exec_state.get("cash", 0),
-            "market_value": total_mv,
-            "total_equity": total_eq,
-            "total_pnl_pct": abs(total_eq - init) / init * 100 * (-1 if total_eq < init else 1),
-            "positions": list(exec_state.get("positions", {}).values()),
+            **dict(projection.get("account") or {}),
+            "positions": list(projection.get("positions") or []),
+            "ledger_authority": projection.get("ledger_authority"),
         }
     except Exception:
         return {}
@@ -339,7 +343,7 @@ def _interpret_alert(alert: dict) -> str:
         llm_cfg = cfg.get("llm", {})
         if not llm_cfg.get("enabled") or not llm_cfg.get("interpret_alerts", True):
             return ""
-        provider = llm_cfg.get("provider", "deepseek")
+        provider = llm_cfg.get("provider", "glm")
         timeout = int(llm_cfg.get("timeout", 25))
         title = alert.get("title", "告警")
         message = alert.get("message", "")
@@ -356,7 +360,7 @@ def _interpret_alert(alert: dict) -> str:
         return ""
 
 
-def _emit(alert: dict):
+def _emit(alert: dict, interpret: bool = True):
     """发送一条告警"""
     alerts = _load_alerts()
     record = {
@@ -376,7 +380,7 @@ def _emit(alert: dict):
         "silenced_until": None,
     }
     # 对 warning/critical 级别告警追加 AI 解读 (可选, 失败留空)
-    if record["level"] in ("warning", "critical"):
+    if interpret and record["level"] in ("warning", "critical"):
         record["ai_hint"] = _interpret_alert(alert)
     alerts.append(record)
     _save_alerts(alerts)
@@ -384,7 +388,7 @@ def _emit(alert: dict):
     return record
 
 
-def _check_all_rules():
+def _check_all_rules(interpret_alerts: bool = True):
     """评估所有启用的规则，返回触发的新告警列表"""
     rules = _load_rules()
     new_alerts = []
@@ -422,7 +426,7 @@ def _check_all_rules():
                 is_dup = True
                 break
         if not is_dup:
-            _emit(new)
+            _emit(new, interpret=interpret_alerts)
 
     # ── 自动恢复: 条件不再触发的 active 告警自动转为 resolved ──
     triggered_rule_ids = {r.get("rule_id") for r in new_alerts}
@@ -458,7 +462,17 @@ def action_list(req):
         alerts = [a for a in alerts if a.get("status") == status]
     if level:
         alerts = [a for a in alerts if a.get("level") == level]
-    alerts = sorted(alerts, key=lambda a: a["created_at"], reverse=True)
+    def _alert_ts(a: dict) -> float:
+        raw = a.get("created_at") or a.get("time") or a.get("created_at_str") or 0
+        try:
+            return float(raw)
+        except Exception:
+            try:
+                return datetime.strptime(str(raw)[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+            except Exception:
+                return 0.0
+
+    alerts = sorted(alerts, key=_alert_ts, reverse=True)
     total = len(alerts)
     page = alerts[offset:offset + limit]
     return {"success": True, "data": {
@@ -530,7 +544,7 @@ def action_silence(req):
 
 def action_check(req=None):
     """手动触发一次所有规则评估（返回新触发的告警）"""
-    _check_all_rules()
+    _check_all_rules(interpret_alerts=False)
     active = [a for a in _load_alerts() if a.get("status") == "active"]
     return {"success": True, "data": {
         "active_count": len(active),
@@ -553,11 +567,27 @@ def action_stats(req=None):
                 return 0.0
         return 0.0
 
+    def _is_test_alert(alert):
+        text = " ".join(str(alert.get(field) or "") for field in (
+            "title", "message", "source", "category", "rule_id"
+        )).lower()
+        return re.search(r"测试|演练|test|contract|smoke|demo", text) is not None
+
+    business_alerts = [a for a in alerts if not _is_test_alert(a)]
+    test_alerts = [a for a in alerts if _is_test_alert(a)]
     return {"success": True, "data": {
         "total": len(alerts),
         "active": len([a for a in alerts if a.get("status") == "active"]),
         "critical_active": len([a for a in alerts if a.get("status") == "active" and a.get("level") == "critical"]),
         "resolved_24h": len([a for a in alerts if a.get("status") == "resolved" and _ts(a.get("resolved_at")) > today_start]),
+        "business_total": len(business_alerts),
+        "business_active": len([a for a in business_alerts if a.get("status") == "active"]),
+        "business_critical_active": len([
+            a for a in business_alerts
+            if a.get("status") == "active" and a.get("level") == "critical"
+        ]),
+        "test_total": len(test_alerts),
+        "test_active": len([a for a in test_alerts if a.get("status") == "active"]),
     }}
 
 

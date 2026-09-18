@@ -5,7 +5,6 @@ import { PersistentRunner } from '../persistent_runner.mjs';
 import { log, json, readBody } from '../http-utils.mjs';
 
 const runner = new PersistentRunner('risk_runner.py');
-runner.ensure();
 
 export async function handleRisk(req, res) {
   const body = await readBody(req);

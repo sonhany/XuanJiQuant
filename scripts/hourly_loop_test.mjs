@@ -12,7 +12,7 @@ const ROOT = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(ROOT, 'logs', 'loop_test');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-const API = 'http://localhost:3334';
+const API = 'http://localhost:8880';
 const NOW = new Date();
 const TS = NOW.toISOString().slice(0, 13).replace('T', '-');  // 2026-06-07-09 (UTC)
 const LOG_FILE = path.join(LOG_DIR, `${TS}.log`);

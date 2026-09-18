@@ -49,6 +49,11 @@ FUNDAMENTAL_FACTORS = [
 def load_financials(code: str, cache) -> pd.DataFrame:
     """从缓存读取某股票的核心财务数据 (长表: report_date 为行)
 
+    自动兼容两种 fin:abstract:<code> 格式:
+      A) 平铺格式: [{report_date, code, roe, roa, ...}] (fetch_core_financials / seed_financials)
+      B) 嵌套格式: [{code, name, period, source, tables:{performance,income,balance,cashflow}}]
+         (rebuild_financials_bulk / akshare_em_bulk) — 中文字段需换算为英文因子
+
     Returns:
         DataFrame[report_date(str YYYYMMDD), code, roe, roa, ...] 或空 df
     """
@@ -56,9 +61,115 @@ def load_financials(code: str, cache) -> pd.DataFrame:
     if not raw:
         return pd.DataFrame()
     df = pd.DataFrame(raw)
-    if 'report_date' not in df.columns:
+
+    # 格式 A: 已有 report_date 列, 直接返回
+    if 'report_date' in df.columns:
+        return df
+
+    # 格式 B: 嵌套 tables → 平铺英文因子
+    # 同时尝试从 fin:supplement:<code> 补充 current_ratio 等字段
+    supplement = cache.get(f'fin:supplement:{code}') if cache else None
+    rows = []
+    for rec in raw:
+        tables = rec.get('tables') or {}
+        period = str(rec.get('period') or '').replace('-', '')
+        if len(period) != 8:
+            continue
+        flat = _flatten_bulk_tables(tables)
+        if not flat:
+            continue
+        # 用补充数据补齐 current_ratio (来自 stock_financial_abstract 80 项指标)
+        if supplement:
+            cr = flat.get('current_ratio')
+            if cr is None or (isinstance(cr, float) and cr != cr):  # None 或 NaN
+                cr_val = supplement.get(period)
+                if cr_val is not None:
+                    flat['current_ratio'] = float(cr_val)
+        flat['report_date'] = period
+        flat['code'] = rec.get('code') or code
+        rows.append(flat)
+    if not rows:
         return pd.DataFrame()
-    return df
+    return pd.DataFrame(rows)
+
+
+def _flatten_bulk_tables(tables: dict) -> dict:
+    """把 akshare_em_bulk 的嵌套 tables 换算为 11 个英文基本面因子。
+
+    字段口径 (基于实测 akshare stock_yjbb_em/lrb_em/zcfz_em 列名):
+      roe      ← performance['净资产收益率']
+      roa      ← income['净利润'] / balance['资产-总资产'] × 100
+      gross_margin ← performance['销售毛利率']
+      net_margin   ← income['净利润'] / income['营业总收入'] × 100
+      revenue_growth ← performance['营业总收入-同比增长']
+      profit_growth  ← performance['净利润-同比增长']
+      debt_ratio     ← balance['资产负债率']
+      asset_turnover ← income['营业总收入'] / balance['资产-总资产'] × 100
+      receivable_turnover ← income['营业总收入'] / balance['资产-应收账款']
+      current_ratio / inventory_turnover: bulk 表无流动资产/营业成本字段, 留 NaN
+
+    数值来自单期报表, 周转率用期末值近似 (无期初均值), 作为截面排序因子已足够。
+    """
+    perf = tables.get('performance') or {}
+    inc = tables.get('income') or {}
+    bal = tables.get('balance') or {}
+
+    def num(d, *keys):
+        """从 dict 里按候选 key 取第一个有限数值。"""
+        for k in keys:
+            v = d.get(k)
+            if v is None:
+                continue
+            try:
+                f = float(v)
+                if f == f and f != 0:  # 非 NaN 且非 0 (避免除零/缺值)
+                    return f
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    out = {col: np.nan for col in FUNDAMENTAL_FACTORS}
+
+    # 直接字段
+    roe = num(perf, '净资产收益率')
+    if roe is not None:
+        out['roe'] = roe
+    gm = num(perf, '销售毛利率')
+    if gm is not None:
+        out['gross_margin'] = gm
+    rg = num(perf, '营业总收入-同比增长', '营业总收入同比增长')
+    if rg is not None:
+        out['revenue_growth'] = rg
+    pg = num(perf, '净利润-同比增长', '净利润同比增长', '归属母公司净利润同比增长')
+    if pg is not None:
+        out['profit_growth'] = pg
+    dr = num(bal, '资产负债率')
+    if dr is not None:
+        out['debt_ratio'] = dr
+
+    # 换算字段
+    net_profit = num(inc, '净利润', '归属母公司股东的净利润')
+    revenue = num(inc, '营业总收入', '营业收入')
+    total_asset = num(bal, '资产-总资产', '资产总计')
+    receivable = num(bal, '资产-应收账款', '应收账款')
+    inventory = num(bal, '资产-存货', '存货')
+    # 营业成本近似: 东财快报 income 表无"营业成本"列, 用"营业支出"代理
+    # (营业总支出含期间费用, 会略高于纯营业成本, 作为截面排序因子可接受)
+    operating_cost = num(inc, '营业总支出-营业支出', '营业支出', '营业成本')
+
+    if net_profit is not None and revenue and abs(revenue) > 1e-6:
+        out['net_margin'] = net_profit / revenue * 100
+    if net_profit is not None and total_asset and abs(total_asset) > 1e-6:
+        out['roa'] = net_profit / total_asset * 100
+    if revenue is not None and total_asset and abs(total_asset) > 1e-6:
+        out['asset_turnover'] = revenue / total_asset * 100
+    if revenue is not None and receivable and abs(receivable) > 1e-6:
+        out['receivable_turnover'] = revenue / receivable
+    if operating_cost is not None and inventory and abs(inventory) > 1e-6:
+        out['inventory_turnover'] = operating_cost / inventory
+
+    # current_ratio: bulk 表无流动资产合计/流动负债合计字段, 保持 NaN
+    return out
 
 
 def compute_fundamental(df: pd.DataFrame, code: str, cache=None) -> pd.DataFrame:

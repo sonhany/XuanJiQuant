@@ -9,10 +9,8 @@ import { fileURLToPath } from 'url';
 export const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = path.resolve(__dirname, '..');
 export const STATIC_DIR = path.join(ROOT_DIR, 'dist');
-export const LOG_FILE = path.join(ROOT_DIR, 'server.log');
-
-// SOCKS5 代理地址
-export const SOCKS_PROXY = 'socks5://127.0.0.1:1088';
+export const LOG_DIR = path.join(ROOT_DIR, 'logs');
+fs.mkdirSync(LOG_DIR, { recursive: true });
 
 // MIME 类型映射
 export const MIME = {
@@ -38,25 +36,28 @@ if (fs.existsSync(envPath)) {
 }
 
 // 服务器端口 / 主机。默认仅监听本机, 避免控制面暴露到局域网。
-export const PORT = Number(process.env.PORT || 3334);
+export const PORT = Number(process.env.PORT || 8880);
 export const HOST = process.env.HOST || '127.0.0.1';
-export const API_TOKEN = process.env.ALPHACOUNCIL_API_TOKEN || '';
-export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3333,http://127.0.0.1:3333')
+export const API_TOKEN = process.env.XUANJI_API_TOKEN || '';
+export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:8888,http://127.0.0.1:8888')
   .split(',').map(s => s.trim()).filter(Boolean);
-
-export const JUHE_API_KEY = process.env.JUHE_API_KEY;
-export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-export const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-export const QWEN_API_KEY = process.env.QWEN_API_KEY;
 
 export function resolvePython() {
   if (process.env.PYTHON) return process.env.PYTHON;
-  try {
-    const out = execSync('where python', { encoding: 'utf-8', windowsHide: true }).trim();
-    const lines = out.split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.includes('uv\\') && !line.includes('WindowsApps')) return line.trim();
-    }
-    return lines[0] || 'python';
-  } catch { return 'python'; }
+  // 跨平台查找: Linux/macOS 用 which, Windows 用 where
+  const isWin = process.platform === 'win32';
+  const finder = isWin ? 'where' : 'which';
+  const candidates = isWin ? ['python', 'python3'] : ['python3', 'python'];
+  for (const name of candidates) {
+    try {
+      const out = execSync(`${finder} ${name}`, { encoding: 'utf-8', windowsHide: true }).trim();
+      const lines = out.split(/\r?\n/);
+      // Windows: 跳过 uv\ 和 WindowsApps 的 shim; Linux: 取第一行
+      const hit = isWin
+        ? lines.find(l => !l.includes('uv\\') && !l.includes('WindowsApps'))
+        : lines[0];
+      if (hit) return hit.trim();
+    } catch { /* 继续尝试下一个候选 */ }
+  }
+  return 'python3';
 }

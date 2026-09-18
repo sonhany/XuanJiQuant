@@ -1,0 +1,16 @@
+{
+  "schema": "kernel-evaluation-v1",
+  "data_kind": "synthetic_engineering_fixture",
+  "instrument": "600000",
+  "currency": "CNY",
+  "initial_cash": "100000.00",
+  "price": "10.00",
+  "lot_size": 100,
+  "fee_per_fill": "5.00",
+  "cases": [
+    {"id": "full", "fills": [1000], "expected_quantity": 1000, "expected_cash": "89995.00"},
+    {"id": "partial_complete", "fills": [400, 600], "expected_quantity": 1000, "expected_cash": "89990.00"},
+    {"id": "partial_cancel", "fills": [400], "expected_quantity": 400, "expected_cash": "95995.00"},
+    {"id": "same_day_roundtrip", "fills": [1000, -1000], "expected_quantity": 0, "expected_cash": "99990.00"}
+  ]
+}

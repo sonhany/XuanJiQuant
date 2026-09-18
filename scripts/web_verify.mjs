@@ -1,118 +1,141 @@
-/**
- * Web 功能验证 — 模拟浏览器对各面板 API 的调用
- * 验证每个 tab 页面加载时需要的数据都能正常获取
- */
-const API = 'http://localhost:3334';
+/** XuanJiQuant Web/API read-only acceptance suite. */
+import fs from 'node:fs';
 
-async function post(route, body) {
+const API = 'http://127.0.0.1:8880';
+
+function token() {
+  if (process.env.XUANJI_API_TOKEN) return process.env.XUANJI_API_TOKEN;
   try {
-    const r = await fetch(`${API}/api/${route}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json();
-    return { ok: r.status === 200, status: r.status, data: j };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+    for (const line of fs.readFileSync('.env', 'utf8').split(/\r?\n/)) {
+      const [key, ...rest] = line.split('=');
+      if (key?.trim() === 'XUANJI_API_TOKEN') return rest.join('=').trim().replace(/^['"]|['"]$/g, '');
+    }
+  } catch {}
+  return '';
 }
 
-async function get(route) {
-  try {
-    const r = await fetch(`${API}/api/${route}`);
-    const j = await r.json();
-    return { ok: r.status === 200, status: r.status, data: j };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+async function post(route, body) {
+  const started = performance.now();
+  const response = await fetch(`${API}/api/${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token() ? { 'X-XuanJi-Token': token() } : {}) },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, data, ms: Math.round(performance.now() - started) };
 }
 
 async function main() {
-  console.log('═══════════════════════════════════════════');
-  console.log('  AlphaCouncil AI — Web 功能验证');
-  console.log('═══════════════════════════════════════════\n');
+  let passed = 0;
+  let failed = 0;
+  const check = (name, condition, detail = '') => {
+    if (condition) { passed += 1; console.log(`PASS ${name} ${detail}`); }
+    else { failed += 1; console.error(`FAIL ${name} ${detail}`); }
+  };
 
-  let pass = 0, fail = 0;
-  function check(name, cond, detail = '') {
-    const icon = cond ? '✅' : '❌';
-    console.log(`  ${icon} ${name}${detail ? ' — ' + detail : ''}`);
-    if (cond) pass++; else fail++;
+  const checks = [
+    ['驾驶舱', 'workbench', { action: 'status' }],
+    ['市场数据', 'data', { action: 'stats' }],
+    ['因子列表', 'factor', { action: 'meta' }],
+    ['策略元数据', 'strategy', { action: 'meta' }],
+    ['模拟账本', 'execution', { action: 'all', refresh_prices: false }],
+    ['组合风险', 'risk', { action: 'portfolio_risk' }],
+    ['系统诊断', 'risk', { action: 'system_health' }],
+    ['告警统计', 'alerts', { action: 'stats' }],
+    ['模拟盘状态', 'paper', { action: 'status' }],
+    ['Qlib 状态', 'qlib', { action: 'status' }],
+    ['数据同步状态', 'sync', { action: 'status' }],
+    ['金十状态', 'jin10', { action: 'status' }],
+    ['巨潮状态', 'cninfo', { action: 'status' }],
+  ];
+
+  for (const [name, route, body] of checks) {
+    const result = await post(route, body);
+    check(name, result.ok && result.data?.success !== false, `HTTP ${result.status} ${result.ms}ms`);
   }
 
-  // ── Tab 1: 数据浏览 ──
-  console.log('📊 Tab 1: 数据浏览');
-  let r = await post('sync', { action: 'status' });
-  check('数据同步状态', r.ok && r.data?.success);
-  r = await post('sync', { action: 'daemon_status' });
-  check('Daemon状态', r.ok);
+  const [workbenchLedger, executionLedger, riskLedger, f5Account] = await Promise.all([
+    post('workbench', { action: 'status' }),
+    post('execution', { action: 'all' }),
+    post('risk', { action: 'portfolio_risk' }),
+    post('paper-execution', { action: 'account' }),
+  ]);
+  const workbenchData = workbenchLedger.data?.data ?? workbenchLedger.data;
+  const executionData = executionLedger.data?.data ?? executionLedger.data;
+  const riskData = riskLedger.data?.data ?? riskLedger.data;
+  const f5AccountData = f5Account.data?.data ?? f5Account.data;
+  const equities = [
+    Number(workbenchData?.account?.total_equity),
+    Number(executionData?.account?.total_equity),
+    Number(riskData?.total_equity),
+    Number(f5AccountData?.account?.total_equity),
+  ];
+  const positionCounts = [
+    Number(workbenchData?.positions?.length),
+    Number(executionData?.positions?.length),
+    Number(riskData?.position_count),
+    Number(f5AccountData?.positions?.length),
+  ];
+  const snapshotIds = [
+    workbenchData?.account?.market_snapshot_id,
+    executionData?.account?.market_snapshot_id,
+    riskData?.market_snapshot_id,
+    f5AccountData?.account?.market_snapshot_id,
+  ].map(value => String(value || '')).filter(Boolean);
+  const sameSnapshot = snapshotIds.length === 4 && new Set(snapshotIds).size === 1;
+  const equitySpread = Math.max(...equities) - Math.min(...equities);
+  const equityScale = Math.max(1, Math.max(...equities));
+  check(
+    '统一账本跨页面一致',
+    equities.every(Number.isFinite)
+      && (sameSnapshot ? equitySpread < 0.02 : equitySpread / equityScale < 0.001)
+      && positionCounts.every((value) => value === positionCounts[0])
+      && workbenchData?.ledger_authority === 'f5'
+      && executionData?.ledger_authority === 'f5'
+      && riskData?.ledger_authority === 'f5'
+      && f5AccountData?.ledger_authority === 'f5',
+    `equity=${equities.join('/')} positions=${positionCounts.join('/')} snapshot=${sameSnapshot ? 'same' : 'moving'} spread=${equitySpread.toFixed(2)}`,
+  );
 
-  // ── Tab 2: 因子引擎 ──
-  console.log('\n📊 Tab 2: 因子引擎');
-  r = await post('factor', { action: 'meta' });
-  check('因子元信息', r.ok && r.data?.success, `${Object.keys(r.data?.data || {}).length}个因子类别`);
-  r = await post('factor', { action: 'market_evaluation' });
-  check('市场因子评估', r.ok);
+  const executionWrite = await post('execution', { action: 'place_order', code: '600000', quantity: 100 });
+  check('自动执行关闭', executionWrite.status === 409 && executionWrite.data?.reason === 'automatic_execution_disabled');
+  const paperWrite = await post('paper', { action: 'run_once' });
+  check('模拟盘控制面删除', paperWrite.status === 409 && paperWrite.data?.reason === 'automatic_execution_disabled');
+  const f5Status = await post('paper-execution', { action: 'status' });
+  const f5Projection = f5Status.data?.data ?? f5Status.data;
+  check(
+    'F5 双通道状态',
+    f5Status.ok
+      && f5Projection?.paper_execution_capability === true
+      && f5Projection?.live_execution_authority === false
+      && typeof f5Projection?.execution_lane === 'string',
+    `HTTP ${f5Status.status} ${f5Status.ms}ms`,
+  );
+  const intradayClosed = f5Projection?.execution_mode === 'paper_intraday'
+    && Boolean(f5Projection?.market_fact_timestamp)
+    && ['completed', 'completed_with_rejections'].includes(f5Projection?.latest_run?.status)
+    && f5Projection?.latest_run?.reconciliation_passed !== false;
+  const dailyPrepared = f5Projection?.execution_mode === 'paper_daily'
+    && f5Projection?.market_fact_timestamp == null
+    && f5Projection?.latest_run?.status === 'prepared'
+    && Boolean(f5Projection?.latest_run?.intended_session);
+  const currentReadiness = f5Projection?.current_readiness;
+  const waitingForWindow = currentReadiness?.paper_execution_ready === true
+    && currentReadiness?.market_window_allowed === false
+    && ['outside_intraday_window', 'non_trading_weekday'].includes(currentReadiness?.reason_code);
+  check(
+    'F5 当前时钟终态有效',
+    f5Status.ok && (intradayClosed || dailyPrepared || waitingForWindow),
+    `HTTP ${f5Status.status} ${f5Status.ms}ms`,
+  );
+  const f5ArbitraryOrder = await post('paper-execution', { action: 'place_order', code: '600000', quantity: 100 });
+  check(
+    'F5 任意下单永久禁止',
+    f5ArbitraryOrder.status === 409 && f5ArbitraryOrder.data?.reason === 'arbitrary_order_action_forbidden',
+  );
 
-  // ── Tab 3: 策略运行 ──
-  console.log('\n📊 Tab 3: 策略运行');
-  r = await post('strategy', { action: 'meta' });
-  check('策略元信息', r.ok && r.data?.success, `${Object.keys(r.data?.data || {}).length}个策略`);
-
-  // ── Tab 4: 交易执行 ──
-  console.log('\n📊 Tab 4: 交易执行');
-  r = await post('execution', { action: 'status' });
-  check('执行账户状态', r.ok && r.data?.success, `权益¥${r.data?.data?.total_equity?.toLocaleString() || '?'}`);
-  r = await post('execution', { action: 'positions' });
-  check('持仓列表', r.ok);
-
-  // ── Tab 5: 模拟盘 ──
-  console.log('\n📊 Tab 5: 模拟盘 (核心)');
-  r = await post('paper', { action: 'status' });
-  check('模拟盘状态', r.ok && r.data?.success);
-  const cfg = r.data?.data?.config || {};
-  check('LLM配置', cfg.llm?.provider === 'glm', `provider=${cfg.llm?.provider} mode=${cfg.llm?.mode}`);
-  r = await post('paper', { action: 'report' });
-  check('日报', r.ok && r.data?.success);
-  const rpt = r.data?.data || {};
-  check('日报数据不stale', rpt.data?.is_stale === false, `latest=${rpt.data?.latest_kline_date}`);
-  check('AI复盘', rpt.ai_review?.active === true, rpt.ai_review?.provider_label || '');
-  r = await post('paper', { action: 'progress' });
-  check('实时进度', r.ok && r.data?.success, `${r.data?.data?.events?.length || 0}条事件`);
-
-  // ── Tab 6: 风控监控 ──
-  console.log('\n📊 Tab 6: 风控监控');
-  r = await post('risk', { action: 'check' });
-  check('风控检查', r.ok && r.data?.success);
-
-  // ── Tab 7: 监控告警 ──
-  console.log('\n📊 Tab 7: 监控告警');
-  r = await post('alerts', { action: 'list' });
-  check('告警列表', r.ok && r.data?.success, `${r.data?.data?.alerts?.length || 0}条告警`);
-
-  // ── AI 五层系统 ──
-  console.log('\n🤖 AI 五层系统');
-  r = await post('paper', { action: 'ai_all_status' });
-  check('AI全层状态聚合', r.ok && r.data?.success);
-  const all = r.data?.data || {};
-  check('L1数据层', !!all.L1_data, `stale=${all.L1_data?.data_stale}`);
-  check('L2因子工厂', (all.L2_factor?.approved?.length || 0) >= 0, `${all.L2_factor?.approved?.length || 0}个通过`);
-  check('L3策略工厂', !!all.L3_strategy, `${all.L3_strategy?.candidates?.length || 0}个候选`);
-  check('L5风控', !!all.L5_risk, `policy=${all.L5_risk?.pre_trade?.trade_policy}`);
-  check('全球动态', !!all.global, `risk=${all.global?.risk_level}`);
-  check('AI总控', !!all.operator, `policy=${all.operator?.trade_policy}`);
-  check('AI闭环', !!all.loop?.latest, `${all.loop?.progress?.length || 0}条进度`);
-
-  // ── GLM 连接 ──
-  console.log('\n🔌 模型连接');
-  r = await post('paper', { action: 'test_llm', provider: 'glm' });
-  check('GLM连接', r.ok && r.data?.success, r.data?.text || r.data?.error || '');
-
-  // ── 总结 ──
-  console.log('\n═══════════════════════════════════════════');
-  console.log(`  结果: ${pass} 通过 / ${fail} 失败 / 共 ${pass + fail} 项`);
-  console.log('═══════════════════════════════════════════');
-  process.exit(fail > 0 ? 1 : 0);
+  console.log(`RESULT ${passed} passed / ${failed} failed`);
+  process.exitCode = failed ? 1 : 0;
 }
 
 main();

@@ -1,81 +1,63 @@
-# Frontend dependencies / build
-node_modules/
-dist/
-build/
-.cache/
-.vite/
-node_modules/.vite/
-node_modules/.vite-temp/
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
 
-# Playwright / browser verification artifacts
-.playwright-mcp/
-playwright-report/
-test-results/
-
-# Runtime logs
-logs/
-*.log
-server/*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Python cache
+# Python caches and local environments
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+.venv/
+.venv-*/
 
-# Runtime data (generated locally)
-data/*.db
-data/*.db-wal
-data/*.db-shm
-data/*.sqlite
-data/*.sqlite3
-data/*.pkl
-data/*.pickle
-data/*.log
-data/*.txt
-data/download_progress.json
-data/factor_evaluation*.json
-data/strategy_scan*.json
-data/cache/
-data/qlib_data/
+# Node and frontend build output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
 
-# Environment files with secrets
-.env
-.env.local
-.env.production
-.env.development
+# Runtime state, logs and databases
+logs/
+data/
+*.pid
+*.log
+*.db-wal
+*.db-shm
 
-# Local screenshots / verification images
-*.png
-screenshots/
-!docs/**/*.png
-!README.assets/**/*.png
-!AI自主架构流程图/**/*.png
-
-# Local audit artifacts
-audit_results.json
-audit_results.md
-audit_script.mjs
-
-# Local archives / workspace dumps
-archive/
-
-# WorkBuddy agent workspace (local only, never commit)
-.workbuddy/
-
-# IDE / OS files
-.vscode/
-.idea/
-*.swp
-*.swo
+# Temporary and editor files
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
 *~
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
 
-# Windows accidental reserved-name file
-nul
+# Local agent / tooling workspaces
+.workbuddy/
+.zcode/
+.superpowers/
+mlruns/
+
+# Generated analysis artifacts (large, reproducible from source)
+archify/
+graphify-out/
+
+# Compiled / binary blobs
+*.dll
+*.pdb
+*.nupkg
+*.exe
+*.so
+*.dylib
+*.bin
+*.cache
+

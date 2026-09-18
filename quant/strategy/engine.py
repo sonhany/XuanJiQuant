@@ -21,6 +21,15 @@ from quant.backtest import BacktestSimulator
 
 logger = logging.getLogger("quant.strategy")
 
+
+def expanding_zscore(series: pd.Series, min_periods: int = 2) -> pd.Series:
+    """Normalize with information available up to each row only."""
+    numeric = pd.to_numeric(series, errors="coerce")
+    mean = numeric.expanding(min_periods=min_periods).mean()
+    std = numeric.expanding(min_periods=min_periods).std(ddof=0).replace(0, np.nan)
+    return ((numeric - mean) / std).fillna(0.0)
+
+
 # ── 内置策略元信息 ──────────────────────────────────────
 STRATEGY_META = {
     "factor_rank": {
@@ -62,6 +71,17 @@ STRATEGY_META = {
     },
 }
 
+STRATEGY_META["topk_dropout"] = {
+    "name": "TopK Dropout",
+    "desc": "Qlib-style long-only rotation: keep TopK names and replace at most n_drop weak holdings per rebalance.",
+    "params": [
+        {"name": "factor_name", "type": "string", "default": "rsi_6", "desc": "score/factor column"},
+        {"name": "topk", "type": "int", "default": 10, "desc": "target holding count"},
+        {"name": "n_drop", "type": "int", "default": 2, "desc": "max names to replace each rebalance"},
+        {"name": "direction", "type": "float", "default": 1.0, "desc": "1=higher score better, -1=lower score better"},
+    ],
+}
+
 ALL_STRATEGIES = list(STRATEGY_META.keys())
 
 
@@ -83,6 +103,7 @@ class StrategyEngine:
             "multi_factor": self._run_multi_factor,
             "ma_cross": self._run_ma_cross,
             "bb_reversion": self._run_bb_reversion,
+            "topk_dropout": self._run_topk_dropout,
         }.get(name)
         if not handler:
             raise ValueError(f"未知策略: {name}")
@@ -92,11 +113,25 @@ class StrategyEngine:
         elapsed = time.time() - t0
 
         # Event-driven backtest via BacktestSimulator
+        commission_rate = float(params.get("commission_rate", 0.0003))
+        min_commission = float(params.get("min_commission", 5.0))
+        stamp_tax_rate = float(params.get("stamp_tax_rate", 0.0005))
+        transfer_fee_rate = float(params.get("transfer_fee_rate", 0.00001))
+        slippage_rate = float(params.get("slippage_rate", 0.0001))
+        enforce_limit = bool(params.get("enforce_limit", True))
+        enforce_t1 = bool(params.get("enforce_t1", True))
+        max_volume_pct = float(params.get("max_volume_pct", 0.10))
         sim = BacktestSimulator(
             initial_cash=1_000_000,
-            commission_rate=0.0003,
-            slippage_rate=0.0001,
+            commission_rate=commission_rate,
+            min_commission=min_commission,
+            stamp_tax_rate=stamp_tax_rate,
+            transfer_fee_rate=transfer_fee_rate,
+            slippage_rate=slippage_rate,
             position_size_pct=0.2,
+            enforce_limit=enforce_limit,
+            enforce_t1=enforce_t1,
+            max_volume_pct=max_volume_pct,
         )
         sim.add_signals(signals)
         sim.add_klines(klines_dict)
@@ -189,9 +224,7 @@ class StrategyEngine:
                 signals[code] = []
                 continue
             df = fdf[['date', factor_name]].dropna().sort_values('date')
-            vals = df[factor_name].values
-            mean, std = np.nanmean(vals), np.nanstd(vals)
-            df['z'] = (df[factor_name] - mean) / (std if std > 0 else 1)
+            df['z'] = expanding_zscore(df[factor_name])
             df['signal'] = df['z'].apply(
                 lambda z: 1 if z > threshold else (-1 if z < -threshold else 0)
             )
@@ -209,7 +242,7 @@ class StrategyEngine:
         weights = [float(w.strip()) for w in params.get("weights", "0.4,0.3,0.3").split(",")]
         if len(factor_names) != len(weights):
             weights = [1.0 / len(factor_names)] * len(factor_names)
-        w = np.array(weights) / sum(weights)
+        weight_map = dict(zip(factor_names, weights))
 
         factor_dfs = self._factor.compute_multi(klines_dict, use_cache=False)
         threshold = 0.3
@@ -222,11 +255,15 @@ class StrategyEngine:
                 continue
             df = fdf[['date'] + cols].dropna().sort_values('date')
             for col in cols:
-                vals = df[col].values
-                m, s = np.nanmean(vals), np.nanstd(vals)
-                df[f'z_{col}'] = (df[col] - m) / (s if s > 0 else 1)
+                df[f'z_{col}'] = expanding_zscore(df[col])
 
-            df['score'] = sum(w[i] * df[f'z_{cols[i]}'] for i in range(len(cols)))
+            active_weights = np.array([weight_map[col] for col in cols], dtype=float)
+            weight_total = float(active_weights.sum())
+            if abs(weight_total) < 1e-12:
+                active_weights = np.full(len(cols), 1.0 / len(cols))
+            else:
+                active_weights = active_weights / weight_total
+            df['score'] = sum(active_weights[i] * df[f'z_{col}'] for i, col in enumerate(cols))
             df['signal'] = df['score'].apply(lambda s: 1 if s > threshold else (-1 if s < -threshold else 0))
 
             signals[code] = [
@@ -236,6 +273,75 @@ class StrategyEngine:
         return signals
 
     # ── 均线交叉策略 ────────────────────────────────────
+    def _run_topk_dropout(self, params: dict,
+                          klines_dict: Dict[str, pd.DataFrame]) -> dict:
+        factor_name = params.get("factor_name") or params.get("score_col") or "rsi_6"
+        topk = max(1, int(params.get("topk", params.get("top_n", 10))))
+        n_drop = max(1, int(params.get("n_drop", 2)))
+        direction = float(params.get("direction", 1.0) or 1.0)
+        higher_is_better = direction >= 0
+
+        factor_dfs = self._factor.compute_multi(klines_dict, use_cache=False)
+        rows = []
+        for code, fdf in factor_dfs.items():
+            if factor_name not in fdf.columns or "date" not in fdf.columns:
+                continue
+            sub = fdf[["date", factor_name]].copy()
+            sub["code"] = code
+            sub[factor_name] = pd.to_numeric(sub[factor_name], errors="coerce")
+            rows.append(sub.dropna(subset=[factor_name]))
+
+        signals = {code: [] for code in klines_dict}
+        if not rows:
+            return signals
+
+        long_df = pd.concat(rows, ignore_index=True).sort_values(["date", "code"])
+        all_dates = sorted(long_df["date"].astype(str).unique())
+        holdings: set[str] = set()
+
+        for date in all_dates:
+            day = long_df[long_df["date"].astype(str) == str(date)].copy()
+            if day.empty:
+                continue
+            day = day.sort_values(factor_name, ascending=not higher_is_better).reset_index(drop=True)
+            day["rank"] = day.index + 1
+            ranked_codes = day["code"].tolist()
+            score_map = dict(zip(day["code"], day[factor_name]))
+            rank_map = dict(zip(day["code"], day["rank"]))
+            desired = set(ranked_codes[: min(topk, len(ranked_codes))])
+
+            if not holdings:
+                new_holdings = desired
+            else:
+                drop_candidates = [code for code in reversed(ranked_codes) if code in holdings and code not in desired]
+                drop_set = set(drop_candidates[:n_drop])
+                keep = holdings - drop_set
+                open_slots = max(0, min(topk, len(ranked_codes)) - len(keep))
+                buy_candidates = [code for code in ranked_codes if code not in keep]
+                new_holdings = keep | set(buy_candidates[:open_slots])
+
+            for code in sorted(holdings - new_holdings):
+                if code in signals:
+                    signals[code].append({
+                        "date": str(date),
+                        "signal": 0,
+                        "score": round(float(score_map.get(code, 0)), 6),
+                        "rank": int(rank_map.get(code, 0)),
+                        "topk": topk,
+                    })
+            for code in sorted(new_holdings - holdings):
+                if code in signals:
+                    signals[code].append({
+                        "date": str(date),
+                        "signal": 1,
+                        "score": round(float(score_map.get(code, 0)), 6),
+                        "rank": int(rank_map.get(code, 0)),
+                        "topk": topk,
+                    })
+            holdings = new_holdings
+
+        return signals
+
     def _run_ma_cross(self, params: dict,
                       klines_dict: Dict[str, pd.DataFrame]) -> dict:
         fast = int(params.get("fast", 5))

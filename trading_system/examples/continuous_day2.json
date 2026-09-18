@@ -1,0 +1,18 @@
+{
+  "schema": "nautilus-baseline-v1",
+  "data_kind": "synthetic",
+  "currency": "CNY",
+  "initial_cash": "100000.00",
+  "instrument": {"code": "600000", "venue": "XSHG", "tick_size": "0.01", "buy_lot": 100},
+  "calendar": ["2026-09-10", "2026-09-11"],
+  "costs": {"commission_rate": "0.0003", "minimum_commission": "5", "sell_tax_rate": "0.0005", "transfer_rate": "0.00001"},
+  "participation": "1",
+  "max_quote_age_ms": 3000,
+  "frames": [{
+    "timestamp": "2026-09-11T10:00:00+08:00",
+    "quote_timestamp": "2026-09-11T10:00:00+08:00",
+    "bid": "10.00", "ask": "10.00", "bid_size": 100000, "ask_size": 100000,
+    "market": {"date": "2026-09-11", "version": "synthetic-master-v1", "suspended": false, "lower_limit": "9.00", "upper_limit": "11.00"},
+    "orders": [{"id": "sell-2", "side": "sell", "quantity": 1000, "limit_price": "10.00"}]
+  }]
+}

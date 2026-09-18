@@ -2,11 +2,16 @@
  * Data 数据层 API 路由 — 持久化 Python 进程
  * 股票列表 + Kline 查询 + Redis 状态
  */
-import { PersistentRunner } from '../persistent_runner.mjs';
+import { dataReadRunner, dataRealtimeRunner, dataStocksRunner } from '../data-runners.mjs';
 import { log, json, readBody } from '../http-utils.mjs';
+import { handleTickCollectorAction } from '../tick_collector_manager.mjs';
 
-const runner = new PersistentRunner('data_runner.py');
-runner.ensure();
+function runnerForAction(action) {
+  if (action === 'hot_snapshot') return dataRealtimeRunner;
+  if (action === 'realtime_prices') return dataRealtimeRunner;
+  if (action === 'stocks') return dataStocksRunner;
+  return dataReadRunner;
+}
 
 export async function handleData(req, res) {
   let body;
@@ -22,8 +27,23 @@ export async function handleData(req, res) {
   }
   log('INFO', `[Data] ${req.method} action=${body.action || 'stats'}`);
   try {
-    const data = await runner.call(body);
-    return json(res, data.success ? 200 : 500, data);
+    const collector = handleTickCollectorAction(body.action || 'stats', body);
+    if (collector) {
+      const status = collector.success ? 200 : 500;
+      return json(res, status, collector);
+    }
+    let data;
+    const runner = runnerForAction(body.action);
+    try {
+      data = await runner.call(body);
+    } catch (e) {
+      if (!String(e.message || '').includes('response id mismatch')) throw e;
+      log('WARN', `[Data] runner protocol mismatch; restarting and retrying once`);
+      runner.restart();
+      data = await runner.call(body);
+    }
+    const status = data.success ? 200 : (Number(data.status) || 500);
+    return json(res, status, data);
   } catch (e) {
     return json(res, 500, { success: false, error: `数据层异常: ${e.message}` });
   }

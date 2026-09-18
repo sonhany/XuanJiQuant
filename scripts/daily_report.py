@@ -21,10 +21,12 @@ import json
 import logging
 import os
 import sys
+from copy import deepcopy
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from quant.data.cache import create_cache
+from quant.paper_execution.runtime import load_active_account_projection
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
@@ -67,28 +69,254 @@ def _active_alerts_summary() -> dict:
         return {"total": 0, "active": 0, "critical": 0}
 
 
-def _position_details(positions: dict) -> list:
+def _clean_code(code) -> str:
+    c = str(code or "").strip().upper()
+    if c.startswith(("SH", "SZ")):
+        c = c[2:]
+    if c.endswith((".SH", ".SZ")):
+        c = c[:-3]
+    return c
+
+
+def _quote_for_code(quotes: dict, code: str) -> dict:
+    if not quotes:
+        return {}
+    pure = _clean_code(code)
+    keys = [code, pure, f"sh{pure}", f"sz{pure}", f"{pure}.SH", f"{pure}.SZ"]
+    for key in keys:
+        if key in quotes and isinstance(quotes[key], dict):
+            return quotes[key]
+        lower = str(key).lower()
+        if lower in quotes and isinstance(quotes[lower], dict):
+            return quotes[lower]
+    return {}
+
+
+def _record_time(record: dict) -> str:
+    for key in ("timestamp", "created_at", "filled_at", "time"):
+        value = record.get(key)
+        if value not in (None, ""):
+            try:
+                numeric = float(value)
+                if numeric > 1_000_000_000:
+                    return datetime.fromtimestamp(numeric).strftime("%Y-%m-%d %H:%M:%S")
+            except (TypeError, ValueError):
+                pass
+            return str(value)
+    return ""
+
+
+def _same_report_day(record: dict, today: str) -> bool:
+    ts = _record_time(record)
+    if not ts:
+        return True
+    return ts.startswith(today) or ts[:10] == today
+
+
+def _record_qty(record: dict) -> int:
+    return int(_safe_float(record.get("quantity", record.get("qty", record.get("filled_qty", 0)))))
+
+
+def _record_price(record: dict) -> float:
+    price = _safe_float(record.get("price"), 0)
+    if price > 0:
+        return price
+    return _safe_float(record.get("filled_price"), 0)
+
+
+def _position_records(code: str, orders: list | None, trades: list | None, today: str) -> list:
+    pure = _clean_code(code)
+    rows = []
+    for trade in trades or []:
+        if _clean_code(trade.get("code")) != pure:
+            continue
+        rows.append({
+            "type": "trade",
+            "time": _record_time(trade),
+            "direction": trade.get("direction", ""),
+            "quantity": _record_qty(trade),
+            "price": round(_record_price(trade), 2),
+            "status": trade.get("status", "filled"),
+        })
+    for order in orders or []:
+        if _clean_code(order.get("code")) != pure:
+            continue
+        rows.append({
+            "type": "order",
+            "time": _record_time(order),
+            "direction": order.get("direction", ""),
+            "quantity": _record_qty(order),
+            "price": round(_record_price(order), 2),
+            "status": order.get("status") or ("filled" if order.get("success") else "rejected"),
+        })
+    rows.sort(key=lambda x: x.get("time") or "", reverse=True)
+    same_day = [r for r in rows if str(r.get("time") or "").startswith(today)]
+    return (same_day or rows)[:8]
+
+
+def _position_details(positions: dict, *, quotes: dict | None = None,
+                      orders: list | None = None, trades: list | None = None,
+                      today: str | None = None) -> list:
     out = []
+    today = today or datetime.now().strftime("%Y-%m-%d")
     for code, p in positions.items():
         qty = int(p.get("quantity", 0))
         if qty == 0:
             continue
+        quote = _quote_for_code(quotes or {}, code)
         avg = _safe_float(p.get("avg_price"))
-        cur = _safe_float(p.get("current_price"), avg)
+        realtime_price = _safe_float(quote.get("price") or quote.get("close"), 0)
+        cur = realtime_price or _safe_float(p.get("current_price"), avg)
         mv = qty * cur
         pnl = (cur - avg) * qty
         pnl_pct = (cur - avg) / avg * 100 if avg > 0 else 0
+        records = _position_records(code, orders, trades, today)
+        name = str(quote.get("name") or p.get("name") or cache.get(f"stock:name:{_clean_code(code)}") or code)
         out.append({
             "code": code,
+            "name": name,
             "quantity": qty,
             "avg_price": round(avg, 2),
+            "realtime_price": round(cur, 2),
             "current_price": round(cur, 2),
+            "amount": round(_safe_float(quote.get("amount")), 2),
+            "chg_pct": round(_safe_float(quote.get("chg_pct")), 2),
             "market_value": round(mv, 2),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl_pct, 2),
             "available_qty": int(p.get("available_qty", qty)),
+            "trade_records": records,
+            "trade_count": len([r for r in records if r.get("type") == "trade"]),
+            "order_count": len([r for r in records if r.get("type") == "order"]),
         })
     out.sort(key=lambda x: abs(x["market_value"]), reverse=True)
+    return out
+
+
+def reconcile_report_with_execution(report: dict | None, active_cache=None) -> dict | None:
+    """Overlay cached report fields with the unique active F5 account."""
+    if not isinstance(report, dict):
+        return report
+    try:
+        projection = load_active_account_projection()
+    except Exception:
+        out = deepcopy(report)
+        out["account_source"] = "cached_report"
+        out["account_stale"] = True
+        return out
+    out = deepcopy(report)
+    today = datetime.now().strftime("%Y-%m-%d")
+    positions = {
+        str(row.get("code") or ""): row
+        for row in projection.get("positions") or []
+        if isinstance(row, dict) and str(row.get("code") or "")
+    }
+    orders = list(projection.get("orders") or [])
+    trades = list(projection.get("trades") or [])
+    live_positions = _position_details(
+        positions,
+        orders=orders,
+        trades=trades,
+        today=today,
+    )
+    authoritative = dict(projection.get("account") or {})
+    initial_capital = _safe_float(authoritative.get("initial_capital"), 1_000_000.0)
+    cash = _safe_float(authoritative.get("cash"))
+    market_value = _safe_float(authoritative.get("market_value"))
+    total_equity = _safe_float(authoritative.get("total_equity"))
+    total_pnl = _safe_float(authoritative.get("total_pnl"), total_equity - initial_capital)
+    total_pnl_pct = _safe_float(authoritative.get("total_pnl_pct"))
+    reported_account = out.get("account") if isinstance(out.get("account"), dict) else {}
+    reported_equity = _safe_float(reported_account.get("total_equity"))
+    review = out.get("ai_review")
+    if (
+        isinstance(review, dict)
+        and review.get("active") is True
+        and abs(reported_equity - total_equity) > max(1_000.0, initial_capital * 0.01)
+    ):
+        out["historical_ai_review"] = deepcopy(review)
+        out["ai_review"] = {
+            **review,
+            "active": False,
+            "stale": True,
+            "error": "account_snapshot_mismatch",
+            "text": "",
+        }
+    out["account"] = {
+        "initial_capital": round(initial_capital, 2),
+        "cash": round(cash, 2),
+        "market_value": round(market_value, 2),
+        "total_equity": round(total_equity, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl_pct, 4),
+        "position_count": len(live_positions),
+    }
+    out["positions"] = live_positions
+    out["attribution"] = sorted(
+        [
+            {
+                "code": item.get("code"),
+                "name": item.get("name") or item.get("code"),
+                "pnl": item.get("pnl", 0),
+                "pnl_pct": item.get("pnl_pct", 0),
+            }
+            for item in live_positions
+        ],
+        key=lambda item: abs(_safe_float(item.get("pnl"))),
+        reverse=True,
+    )
+    benchmark = out.get("benchmark")
+    if isinstance(benchmark, dict) and benchmark.get("comparable"):
+        benchmark["excess_return_pct"] = round(
+            total_pnl_pct - _safe_float(benchmark.get("total_return_pct")),
+            4,
+        )
+    out["account_source"] = "f5_ledger"
+    out["account_as_of"] = authoritative.get("updated_at")
+    out["ledger_authority"] = "f5"
+    out["account_stale"] = False
+    return out
+
+
+def project_report_data_freshness(
+    report: dict | None,
+    active_cache=None,
+    *,
+    now: datetime | None = None,
+) -> dict | None:
+    """Overlay a cached report with the current full-market daily-bar status."""
+    if not isinstance(report, dict):
+        return report
+    from scripts.data_freshness import assess_market_kline_coverage, get_expected_date
+
+    expected_for_now = get_expected_date(now)
+    coverage = assess_market_kline_coverage(
+        cache=active_cache or cache,
+        expected_date=expected_for_now,
+    )
+    expected = str(coverage.get("expected_date") or expected_for_now).replace("-", "")[:8]
+    latest = str(coverage.get("coverage_date") or "").replace("-", "")[:8]
+    stale = not bool(coverage.get("fresh"))
+    stale_days = 0
+    if stale and expected and latest:
+        try:
+            stale_days = max(
+                0,
+                (datetime.strptime(expected, "%Y%m%d") - datetime.strptime(latest, "%Y%m%d")).days,
+            )
+        except ValueError:
+            stale_days = 0
+
+    out = deepcopy(report)
+    data = dict(out.get("data") or {})
+    data.update({
+        "latest_kline_date": latest,
+        "expected_latest": expected,
+        "is_stale": stale,
+        "stale_days": stale_days,
+        "market_coverage": coverage,
+    })
+    out["data"] = data
     return out
 
 
@@ -98,15 +326,27 @@ def generate_report() -> dict:
     today_compact = datetime.now().strftime("%Y%m%d")
 
     # ── 账户快照 ──────────────────────
-    exec_state = cache.get("execution:state") or {}
-    init_cap = _safe_float(exec_state.get("initial_capital"), 1_000_000)
-    cash = _safe_float(exec_state.get("cash"))
-    positions = exec_state.get("positions", {})
-    pos_list = _position_details(positions)
-    total_mv = sum(p["market_value"] for p in pos_list)
-    total_equity = cash + total_mv
-    total_pnl = total_equity - init_cap
-    total_pnl_pct = total_pnl / init_cap * 100 if init_cap else 0
+    projection = load_active_account_projection()
+    authoritative = dict(projection.get("account") or {})
+    init_cap = _safe_float(authoritative.get("initial_capital"), 1_000_000)
+    cash = _safe_float(authoritative.get("cash"))
+    positions = {
+        str(row.get("code") or ""): row
+        for row in projection.get("positions") or []
+        if isinstance(row, dict) and str(row.get("code") or "")
+    }
+    orders_all = list(projection.get("orders") or [])
+    trades_all = list(projection.get("trades") or [])
+    pos_list = _position_details(
+        positions,
+        orders=orders_all,
+        trades=trades_all,
+        today=today,
+    )
+    total_mv = _safe_float(authoritative.get("market_value"))
+    total_equity = _safe_float(authoritative.get("total_equity"))
+    total_pnl = _safe_float(authoritative.get("total_pnl"), total_equity - init_cap)
+    total_pnl_pct = _safe_float(authoritative.get("total_pnl_pct"))
 
     # ── 基准对比 ──────────────────────
     benchmark = {}
@@ -122,31 +362,62 @@ def generate_report() -> dict:
             "daily_return_pct": bm.get("daily_return_pct", 0),
             "total_return_pct": bm_ret,
             "excess_return_pct": round(excess, 4),
+            "initial_date": bm.get("initial_date"),
+            "end_date": today,
+            "comparable": bool(bm.get("initial_date") and not bm.get("last_error")),
+            "source": "paper:benchmark",
         }
     except Exception as e:
         logger.debug(f"benchmark refresh failed: {e}")
         benchmark = {"error": str(e)[:120]}
 
     # ── 今日订单/风控 ────────────────
-    paper_status = cache.get("paper:status") or {}
-    last_result = paper_status.get("last_result") or {}
-    today_orders = last_result.get("orders", [])
-    risk_rejections = last_result.get("risk_rejections", [])
-    skipped_orders = last_result.get("skipped_orders", [])
-    skip_reason = last_result.get("skip_reason")
+    today_orders = [row for row in orders_all if _same_report_day(row, today)]
+    risk_rejections = [
+        row for row in today_orders if str(row.get("status") or "") == "rejected"
+    ]
+    skipped_orders = []
+    skip_reason = None
 
     # ── 数据状态 (统一入口) ─────────────
-    from scripts.data_freshness import is_data_stale, get_latest_kline_date, get_expected_date
-    latest_date = get_latest_kline_date()
-    expected_latest = get_expected_date()
-    is_stale = is_data_stale()
-
     # ── 告警 ─────────────────────────
     alerts_summary = _active_alerts_summary()
+    from quant.risk.config import load_risk_config
+    risk_limits = load_risk_config(cache)
+
+    portfolio_plan = cache.get("ai:portfolio:latest") or {}
+    target_rows = portfolio_plan.get("target_weights") or []
+    target_map = {str(row.get("code", "")).split(".")[0]: row for row in target_rows if isinstance(row, dict)}
+    target_drift = []
+    for position in pos_list:
+        code = str(position.get("code", "")).split(".")[0]
+        target = target_map.get(code, {})
+        current_weight = position["market_value"] / total_equity if total_equity > 0 else 0
+        target_weight = _safe_float(target.get("target_weight"))
+        target_drift.append({
+            "code": code,
+            "name": position.get("name") or code,
+            "current_weight": round(current_weight, 6),
+            "target_weight": round(target_weight, 6),
+            "difference": round(target_weight - current_weight, 6),
+        })
+    attribution = sorted([
+        {
+            "code": position.get("code"),
+            "name": position.get("name") or position.get("code"),
+            "pnl": position.get("pnl", 0),
+            "pnl_pct": position.get("pnl_pct", 0),
+        }
+        for position in pos_list
+    ], key=lambda item: abs(_safe_float(item.get("pnl"))), reverse=True)
 
     report = {
         "report_date": today,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "account_source": "f5_ledger",
+        "account_as_of": authoritative.get("updated_at"),
+        "ledger_authority": "f5",
+        "account_stale": False,
         "account": {
             "initial_capital": round(init_cap, 2),
             "cash": round(cash, 2),
@@ -161,20 +432,87 @@ def generate_report() -> dict:
         "today_orders": today_orders,
         "today_orders_count": len(today_orders),
         "risk_rejections": risk_rejections,
+        "risk_limits": {
+            "position_stop_loss_pct": risk_limits.get("max_position_loss_pct"),
+            "max_daily_loss_pct": risk_limits.get("max_daily_loss_pct"),
+            "max_drawdown_pct": risk_limits.get("max_drawdown_pct"),
+            "source": risk_limits.get("_hard_limits_source"),
+        },
+        "target_drift": target_drift,
+        "attribution": attribution,
         "skipped_orders": skipped_orders,
         "paper_skip_reason": skip_reason,
         "paper_last_run": paper_status.get("last_run"),
         "paper_running": paper_status.get("running", False),
-        "data": {
-            "latest_kline_date": latest_date,
-            "is_stale": is_stale,
-            "stale_days": (int(expected_latest[:8]) - int(latest_date)) if is_stale and latest_date else 0,
-        },
+        "data": {},
         "alerts": alerts_summary,
     }
+    report = project_report_data_freshness(report, cache)
     # ── AI 复盘 (可选, 失败不影响报告) ─────────────────
     report["ai_review"] = _generate_ai_review(report)
     return report
+
+
+def _local_ai_review(report: dict, *, provider: str = "", provider_label: str = "", reason: str = "") -> dict:
+    acc = report.get("account", {}) or {}
+    data = report.get("data", {}) or {}
+    alerts = report.get("alerts", {}) or {}
+    positions = report.get("positions", []) or []
+    rejections = report.get("risk_rejections", []) or []
+    total_pnl = float(acc.get("total_pnl_pct") or 0)
+    cash = float(acc.get("cash") or 0)
+    equity = float(acc.get("total_equity") or 0)
+    cash_pct = (cash / equity * 100) if equity > 0 else 0
+    latest = data.get("latest_kline_date", "N/A")
+    data_state = "过期" if data.get("is_stale") else "正常"
+    top_positions = positions[:3]
+    pos_text = "、".join([f"{p.get('code')}({float(p.get('pnl_pct') or 0):+.1f}%)" for p in top_positions]) or "空仓"
+    points = [
+        f"组合累计收益 {total_pnl:+.2f}%，现金占比约 {cash_pct:.1f}%，当前持仓 {len(positions)} 只。",
+        f"最新K线日期 {latest}，数据状态为{data_state}，交易前仍需通过数据新鲜度门禁。",
+        f"主要持仓: {pos_text}。",
+        f"活跃告警 {alerts.get('active', 0)} 条，严重告警 {alerts.get('critical', 0)} 条，风控拒单 {len(rejections)} 笔。",
+    ]
+    if reason:
+        points.append(f"外部模型复盘暂不可用，已启用本地规则复盘: {reason[:120]}")
+    return {
+        "enabled": True,
+        "active": True,
+        "fallback": True,
+        "provider": provider or "local_rules",
+        "provider_label": provider_label or "本地规则复盘",
+        "text": "\n".join(f"- {p}" for p in points),
+        "error": reason[:200] if reason else "",
+    }
+
+
+def _ai_review_is_presentable(value) -> bool:
+    """Accept concise review bullets and reject model meta-reasoning."""
+    text = str(value or "").strip()
+    if not text or len(text) > 1200:
+        return False
+    forbidden = (
+        "让我们",
+        "精确重数",
+        "字数",
+        "等等",
+        "推理过程",
+        "思考过程",
+        "重新组织",
+    )
+    if any(marker in text for marker in forbidden):
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not 3 <= len(lines) <= 8 or any(len(line) > 180 for line in lines):
+        return False
+    bullet_count = sum(
+        1
+        for line in lines
+        if line.startswith(("- ", "* ", "• "))
+        or (len(line) >= 2 and line[0].isdigit() and line[1] in ".、")
+        or line.startswith("要点")
+    )
+    return bullet_count >= 3
 
 
 def _generate_ai_review(report: dict) -> dict:
@@ -183,11 +521,11 @@ def _generate_ai_review(report: dict) -> dict:
     cfg = cache.get("paper:config") or {}
     llm_cfg = cfg.get("llm", {})
     if not llm_cfg.get("enabled"):
-        return {"enabled": False}
+        return _local_ai_review(report, reason="paper llm disabled")
 
     try:
         from scripts.llm_client import chat, get_provider_label
-        provider = llm_cfg.get("provider", "deepseek")
+        provider = llm_cfg.get("provider", "glm")
         timeout = int(llm_cfg.get("timeout", 25))
 
         # 构建精简上下文
@@ -223,7 +561,7 @@ def _generate_ai_review(report: dict) -> dict:
             "客观分析，不编造数据，每条不超过50字。直接输出要点，不要展示推理过程。"
         )
         r = chat(provider, system, context, temperature=0.3, timeout=max(timeout, 45), max_tokens=1500, scene="report")
-        if r["success"]:
+        if r["success"] and _ai_review_is_presentable(r.get("text")):
             return {
                 "enabled": True,
                 "active": True,
@@ -231,10 +569,22 @@ def _generate_ai_review(report: dict) -> dict:
                 "provider": provider,
                 "provider_label": get_provider_label(provider),
             }
-        return {"enabled": True, "active": False, "error": r.get("error", "")}
+        if r["success"]:
+            return _local_ai_review(
+                report,
+                provider=provider,
+                provider_label=get_provider_label(provider),
+                reason="invalid_ai_review_format",
+            )
+        return _local_ai_review(
+            report,
+            provider=provider,
+            provider_label=get_provider_label(provider),
+            reason=r.get("error", ""),
+        )
     except Exception as e:
         logger.debug(f"ai_review failed: {e}")
-        return {"enabled": True, "active": False, "error": str(e)[:100]}
+        return _local_ai_review(report, reason=str(e)[:100])
 
 
 def save_report(report: dict):
@@ -247,7 +597,7 @@ def format_report_text(report: dict) -> str:
     """格式化成可读文本日报。"""
     lines = []
     lines.append("=" * 56)
-    lines.append(f"  AlphaCouncil 每日模拟盘日报  {report['report_date']}")
+    lines.append(f"  XuanJi 每日模拟盘日报  {report['report_date']}")
     lines.append("=" * 56)
 
     acc = report.get("account", {})
@@ -321,6 +671,11 @@ def format_report_text(report: dict) -> str:
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="每日模拟盘日报")
     parser.add_argument("--json", action="store_true", help="输出 JSON 到 stdout")
     parser.add_argument("--text", action="store_true", help="输出可读文本到 stdout")

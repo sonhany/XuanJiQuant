@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "QuantConnect.Common": {
+        "type": "Direct",
+        "requested": "[2.5.18042, )",
+        "resolved": "2.5.18042",
+        "contentHash": "zR+jYngMHl3ZL4tKPS4RFtL2qnJAFnK14LrJavOYYfObEl66OwysFDh3x8PWE3rywvf3Q8D5vCXExeujy1XQCw==",
+        "dependencies": {
+          "CloneExtensions": "1.3.0",
+          "MathNet.Numerics": "5.0.0",
+          "Microsoft.IO.RecyclableMemoryStream": "3.0.1",
+          "Newtonsoft.Json": "13.0.2",
+          "NodaTime": "3.0.5",
+          "QLNet": "1.13.1",
+          "QuantConnect.Compression": "2.5.18042",
+          "QuantConnect.Configuration": "2.5.18042",
+          "QuantConnect.Logging": "2.5.18042",
+          "QuantConnect.pythonnet": "2.0.65",
+          "fasterflect": "3.0.0",
+          "protobuf-net": "3.1.33"
+        }
+      },
+      "System.Drawing.Common": {
+        "type": "Direct",
+        "requested": "[10.0.12, )",
+        "resolved": "10.0.12",
+        "contentHash": "FBUxiucg2gsnyItbpGgyXI5u8FYLcqdLKS1XJkHHTj3RK1c6kpsJr/Y9i4edUNF7LqCYFrHqpHEvpt8/lNBe9w==",
+        "dependencies": {
+          "Microsoft.Win32.SystemEvents": "10.0.12"
+        }
+      },
+      "CloneExtensions": {
+        "type": "Transitive",
+        "resolved": "1.3.0",
+        "contentHash": "4YL85qfQuWplSQCIML3qAYb4dOHtujD2hCP0JVvai+jQGiM4HLZ8qFipoMwNOA8k16lTX/MaRVULb0kKAbfoOA=="
+      },
+      "DotNetZip": {
+        "type": "Transitive",
+        "resolved": "1.16.0",
+        "contentHash": "CS9sjjXF23FLIbwlLT5k/jXBYxVnLMn01lyAvN/hxFM+UDvSicjTPB9ZMA+Wp/QlvBPbD2pzkAXUp1O50gP/Lw==",
+        "dependencies": {
+          "System.Security.Permissions": "4.7.0"
+        }
+      },
+      "fasterflect": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "nXucxx84mYH+fS9U92a4Ak/MfWP0H204c8D2I64zsOQynnihhavO6HOCUcpp8HfKZMn3aNn01iv1bINnxH7Kow=="
+      },
+      "MathNet.Numerics": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "pg1W2VwaEQMAiTpGK840hZgzavnqjlCMTVSbtVCXVyT+7AX4mc1o89SPv4TBlAjhgCOo9c1Y+jZ5m3ti2YgGgA=="
+      },
+      "McMaster.Extensions.CommandLineUtils": {
+        "type": "Transitive",
+        "resolved": "2.6.0",
+        "contentHash": "paiRzqvqdSFdcWVTXn6SzphajrpjFM5ERiGlgccL5J2lgHbty068D63Maqmj0VTG0G9ciP2m/NSIgGnNv8WOLw==",
+        "dependencies": {
+          "System.ComponentModel.Annotations": "4.7.0"
+        }
+      },
+      "Microsoft.IO.RecyclableMemoryStream": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "s/s20YTVY9r9TPfTrN5g8zPF1YhwxyqO6PxUkrYTGI2B+OGPe9AdajWZrLhFqXIvqIW23fnUE4+ztrUWNU1+9g=="
+      },
+      "Microsoft.Win32.SystemEvents": {
+        "type": "Transitive",
+        "resolved": "10.0.12",
+        "contentHash": "kdj5cqOwgZCMltEhQ4+WVUoFkMHG08EJfy1MDyS9H+FBg66vTTFyX8YcNl8IQh5wRQv79P+iduQgDGY8ucBR+w=="
+      },
+      "Newtonsoft.Json": {
+        "type": "Transitive",
+        "resolved": "13.0.2",
+        "contentHash": "R2pZ3B0UjeyHShm9vG+Tu0EBb2lC8b0dFzV9gVn50ofHXh9Smjk6kTn7A/FdAsC8B5cKib1OnGYOXxRBz5XQDg=="
+      },
+      "NodaTime": {
+        "type": "Transitive",
+        "resolved": "3.0.5",
+        "contentHash": "ctgx76GTZ3hcE0lV/XepXskkZ2m3F/XSftwb/a3vK+vSorbT3QhGgWp/ZNb13oyKQhBdFIPiISilvx49LQggtw=="
+      },
+      "protobuf-net": {
+        "type": "Transitive",
+        "resolved": "3.1.33",
+        "contentHash": "tv6wc8QvCjGOY/grQ/irxUWqRtHpVzOLY87+jvINxYOD5n0o4TX9RukJ/FRkVyMeQtLLhf/0okQFb4rQgoWt8A==",
+        "dependencies": {
+          "protobuf-net.Core": "3.1.33"
+        }
+      },
+      "protobuf-net.Core": {
+        "type": "Transitive",
+        "resolved": "3.1.33",
+        "contentHash": "uq+KLED4Mwx1BnTE5TTtawQgaCRpajcbRKaYsEbY5biWWK1O5+rCBTd6+9EpK6CYxd2POUHkpwTslPs4SCoHOw=="
+      },
+      "QLNet": {
+        "type": "Transitive",
+        "resolved": "1.13.1",
+        "contentHash": "lJrP6Dmr8bqeiqbIce/4RQPOAePFCPzOt2+Wmrqbu5q1egotXx80Flv9rCsZfb443Fi8znM65Lay/PfvJuDfRw=="
+      },
+      "QuantConnect.Compression": {
+        "type": "Transitive",
+        "resolved": "2.5.18042",
+        "contentHash": "SmWNmZXDRw4kGx+lF52fIyORD5T4m/PYZWMEPTdzQKQKCKLiunWPy5m10hT6hlCCGIR7167VY9evD+Pzb1xM6w==",
+        "dependencies": {
+          "DotNetZip": "1.16.0",
+          "QuantConnect.Logging": "2.5.18042",
+          "SharpZipLib": "1.3.3"
+        }
+      },
+      "QuantConnect.Configuration": {
+        "type": "Transitive",
+        "resolved": "2.5.18042",
+        "contentHash": "g42tLAzfUGFbPnY2JlLq2kc1z31loD+h4TfD1ZrqWm25EBY6AhanblpYbWWj5F5YHDh8IKe7T13ZTmIknwAk+w==",
+        "dependencies": {
+          "McMaster.Extensions.CommandLineUtils": "2.6.0",
+          "Newtonsoft.Json": "13.0.2",
+          "QuantConnect.Logging": "2.5.18042"
+        }
+      },
+      "QuantConnect.Logging": {
+        "type": "Transitive",
+        "resolved": "2.5.18042",
+        "contentHash": "rrjS2l/J8MPNYYLxRE1KqXRoL8JyoBRp7ax7inzzuk7a+asg5mPb9FUd5Lhzrbw/nfGOKlTUeWxdhpNhKMGWFQ==",
+        "dependencies": {
+          "System.ComponentModel.Composition": "6.0.0"
+        }
+      },
+      "QuantConnect.pythonnet": {
+        "type": "Transitive",
+        "resolved": "2.0.65",
+        "contentHash": "OeQpsfHRhK3boULMQ1km15Oi6EfpH9yGaCX0oozdpFbWUduh3BsKprty5PCINoiWI61fXCGCMDohddIBWVUvYg==",
+        "dependencies": {
+          "fasterflect": "3.0.0"
+        }
+      },
+      "SharpZipLib": {
+        "type": "Transitive",
+        "resolved": "1.3.3",
+        "contentHash": "N8+hwhsKZm25tDJfWpBSW7EGhH/R7EMuiX+KJ4C4u+fCWVc1lJ5zg1u3S1RPPVYgTqhx/C3hxrqUpi6RwK5+Tg=="
+      },
+      "System.ComponentModel.Annotations": {
+        "type": "Transitive",
+        "resolved": "4.7.0",
+        "contentHash": "0YFqjhp/mYkDGpU0Ye1GjE53HMp9UVfGN7seGpAMttAC0C40v5gw598jCgpbBLMmCo0E5YRLBv5Z2doypO49ZQ=="
+      },
+      "System.ComponentModel.Composition": {
+        "type": "Transitive",
+        "resolved": "6.0.0",
+        "contentHash": "60Qv+F7oxomOjJeTDA5Z4iCyFbQ0B/2Mi5HT+13pxxq0lVnu2ipbWMzFB+RWKr3wWKA8BSncXr9PH/fECwMX5Q=="
+      },
+      "System.Security.Permissions": {
+        "type": "Transitive",
+        "resolved": "4.7.0",
+        "contentHash": "dkOV6YYVBnYRa15/yv004eCGRBVADXw8qRbbNiCn/XpdJSUXkkUeIvdvFHkvnko4CdKMqG8yRHC4ox83LSlMsQ==",
+        "dependencies": {
+          "System.Windows.Extensions": "4.7.0"
+        }
+      },
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "4.7.0",
+        "contentHash": "CeWTdRNfRaSh0pm2gDTJFwVaXfTq6Xwv/sA887iwPTneW7oMtMlpvDIO+U60+3GWTB7Aom6oQwv5VZVUhQRdPQ==",
+        "dependencies": {
+          "System.Drawing.Common": "4.7.0"
+        }
+      }
+    }
+  }
+}

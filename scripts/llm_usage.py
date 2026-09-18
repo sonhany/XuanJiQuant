@@ -2,7 +2,7 @@
 
 设计:
   - 每次调用 LLM 成功后, 把 usage (prompt/completion/total_tokens) 写入 SQLite
-  - 同时记录 provider (glm/deepseek/qwen/gemini) 和 scene (调用场景)
+  - 同时记录 provider (glm) 和 scene (调用场景)
   - 统计维度: 实时单次 / 按天累计 / 按 provider / 按 scene
   - 零依赖, 复用 quant.data.cache 的 SQLite 单例
 
@@ -17,7 +17,7 @@
     "date": "2026-07-03",             # 日期 (便于按天筛选)
     "provider": "glm",                # 供应商
     "scene": "operator",              # 调用场景
-    "model": "glm-5.2",               # 模型名 (可能为空)
+    "model": "<registry-model>",      # 模型名（由统一注册表解析）
     "prompt_tokens": 120,             # 输入 token
     "completion_tokens": 80,          # 输出 token
     "total_tokens": 200,              # 总 token
@@ -59,7 +59,7 @@ def record_usage(
     """记录一次 LLM 调用的 token 使用量。
 
     Args:
-        provider: 供应商 (glm/deepseek/qwen/gemini)
+        provider: 供应商 (glm)
         scene:    调用场景 (test/operator/data/factor/strategy/execution/risk/report/alert/paper)
         usage:    供应商返回的 usage dict (含 prompt_tokens/completion_tokens/total_tokens)
                   为空或缺失时记 0, 不阻塞调用方

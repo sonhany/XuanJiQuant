@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "default_provider": "glm",
+  "providers": {
+    "glm": {
+      "label": "GLM 5.2 (ifanr)",
+      "client_label": "GLM",
+      "default_model": "glm-5.2",
+      "models": [
+        {
+          "id": "glm-5.2",
+          "label": "GLM 5.2 (ifanr)"
+        }
+      ],
+      "aliases": {}
+    },
+    "opencode": {
+      "label": "OpenCode.ai",
+      "client_label": "OpenCode Zen",
+      "default_model": "deepseek-v4-flash-free",
+      "models": [
+        {
+          "id": "deepseek-v4-flash-free",
+          "label": "deepseek-v4-flash-free",
+          "note": "当前默认"
+        },
+        {
+          "id": "nemotron-3-ultra-free",
+          "label": "nemotron-3-ultra-free",
+          "note": "上下文推理"
+        }
+      ],
+      "aliases": {
+        "deepseek": "deepseek-v4-flash-free"
+      }
+    }
+  }
+}

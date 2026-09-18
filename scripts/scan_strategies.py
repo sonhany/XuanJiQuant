@@ -18,6 +18,7 @@ import os
 import pickle
 import sys
 import time
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,9 @@ from quant.data.loader import load_kline_df
 from quant.factor import FactorEngine
 from quant.factor.price_volume import PRICE_VOLUME_FACTORS
 from quant.factor.technical import TECHNICAL_FACTORS
+from quant.factor.input_contract import governed_daily_bars, load_factor_input_snapshot
 from quant.backtest.engine import is_limit_bar
+from scripts.data_freshness import get_expected_date
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("scan")
@@ -60,7 +63,90 @@ TOP_N = 20  # 每期选股数
 HOLD_DAYS = 5
 
 
-def load_factors_for_all(cache, fe, use_snapshot=True):
+def artifact_matches_input(artifact: dict, input_snapshot) -> bool:
+    return bool(
+        artifact.get("snapshot_id") == input_snapshot.snapshot_id
+        and artifact.get("data_version") == input_snapshot.data_version
+        and artifact.get("universe_version") == input_snapshot.universe_version
+    )
+
+
+def load_governed_evaluation(path, input_snapshot) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        evaluation = json.load(handle)
+    if not artifact_matches_input(evaluation, input_snapshot):
+        raise ValueError("factor evaluation input version mismatch")
+    return evaluation
+
+
+def latest_kline_date_from_cache(cache) -> str:
+    try:
+        from scripts.data_freshness import assess_market_kline_coverage
+
+        return str(
+            assess_market_kline_coverage(cache=cache).get("coverage_date") or ""
+        )
+    except Exception:
+        return ""
+
+
+def snapshot_is_fresh(snapshot: dict, latest_kline_date: str = "") -> bool:
+    """Return True only when the factor snapshot matches the latest K-line date."""
+    if not isinstance(snapshot, dict):
+        return False
+    snapshot_date = str(snapshot.get("latest_kline_date") or "")
+    if not snapshot_date:
+        return False
+    if latest_kline_date and snapshot_date < str(latest_kline_date):
+        return False
+    frames = snapshot.get("mf")
+    if isinstance(frames, dict) and frames:
+        coverage = factor_snapshot_coverage(
+            frames, expected_date=str(latest_kline_date or snapshot_date)
+        )
+        if coverage.get("fresh") is not True:
+            return False
+    return True
+
+
+def factor_snapshot_coverage(mf: dict, *, expected_date: str) -> dict:
+    counts: Counter[str] = Counter()
+    for frame in (mf or {}).values():
+        if frame is None or getattr(frame, "empty", True) or "date" not in frame.columns:
+            continue
+        try:
+            date_text = str(frame["date"].dropna().astype(str).max() or "").replace("-", "")[:8]
+        except Exception:
+            continue
+        if date_text:
+            counts[date_text] += 1
+    total = sum(counts.values())
+    coverage_date = ""
+    dominant_count = 0
+    if counts:
+        coverage_date, dominant_count = max(
+            counts.items(), key=lambda item: (item[1], item[0])
+        )
+    expected = str(expected_date or "").replace("-", "")[:8]
+    expected_count = sum(count for date_text, count in counts.items() if date_text >= expected)
+    expected_coverage = expected_count / total if total else 0.0
+    try:
+        threshold = float(os.getenv("FULL_MARKET_KLINE_MIN_COVERAGE", "0.95"))
+    except (TypeError, ValueError):
+        threshold = 0.95
+    threshold = max(0.8, min(threshold, 1.0))
+    return {
+        "fresh": bool(total and coverage_date >= expected and expected_coverage >= threshold),
+        "coverage_date": coverage_date,
+        "dominant_count": dominant_count,
+        "expected_count": expected_count,
+        "total_count": total,
+        "expected_coverage": round(expected_coverage, 6),
+        "minimum_coverage": threshold,
+    }
+
+
+def load_factors_for_all(cache, fe, input_snapshot, use_snapshot=True):
     """计算所有股票的因子，返回 {code: factor_df}。
     优先从 factor_snapshot.pkl 加载 (与 evaluate_factors 共用), 避免 ~9 分钟重算。
     """
@@ -68,26 +154,62 @@ def load_factors_for_all(cache, fe, use_snapshot=True):
         try:
             with open(SNAPSHOT_FILE, 'rb') as f:
                 snap = pickle.load(f)
+            if not artifact_matches_input(snap, input_snapshot):
+                raise ValueError("factor snapshot input version mismatch")
+            latest_date = latest_kline_date_from_cache(cache)
+            if not snapshot_is_fresh(snap, latest_date):
+                raise ValueError(f"stale factor snapshot: snapshot={snap.get('latest_kline_date')} latest={latest_date}")
             logger.info(f"从快照加载因子: {len(snap['mf'])} 只 ({SNAPSHOT_FILE})")
             return snap['mf']
         except Exception as e:
             logger.warning(f"快照加载失败 ({e}), 重新计算")
-    keys = cache.keys('kline:*:d')
+    keys = [f"kline:{code}:d" for code in input_snapshot.eligible_codes]
     mf = {}
+    mk = {}
     t0 = time.time()
     for i, k in enumerate(keys, 1):
-        bars = cache.get(k)
+        bars = governed_daily_bars(cache, k.split(':')[1], input_snapshot)
         if not bars:
             continue
         code = k.split(':')[1]
         try:
             df = load_kline_df(bars)
-            mf[code] = fe.compute_all(df, code=None)
+            mf[code] = fe.compute_all(df, code=code)
+            mk[code] = df
         except Exception:
             pass
         if i % 1000 == 0:
             logger.info(f"  因子计算 [{i}/{len(keys)}] ({i/(time.time()-t0):.1f}/s)")
     logger.info(f"因子计算完成: {len(mf)} 只, {time.time()-t0:.0f}s")
+    if mf:
+        temporary = f"{SNAPSHOT_FILE}.{os.getpid()}.{time.time_ns()}.tmp"
+        try:
+            coverage = factor_snapshot_coverage(
+                mf, expected_date=latest_kline_date_from_cache(cache)
+            )
+            with open(temporary, "wb") as handle:
+                pickle.dump(
+                    {
+                        "mf": mf,
+                        "mk": mk,
+                        "saved_at": time.time(),
+                        "latest_kline_date": coverage.get("coverage_date") or "",
+                        "factor_coverage": coverage,
+                        "kline_key_count": len(keys),
+                        **input_snapshot.metadata(),
+                    },
+                    handle,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            os.replace(temporary, SNAPSHOT_FILE)
+            logger.info("factor snapshot atomically refreshed: %s", SNAPSHOT_FILE)
+        except Exception as exc:
+            try:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+            except OSError:
+                pass
+            logger.warning("factor snapshot persistence failed: %s", exc)
     return mf
 
 
@@ -308,7 +430,8 @@ def multi_factor_backtest(mf, factor_weights, top_n=TOP_N, hold=HOLD_DAYS,
     selectable = score.where(fwd_ret_wide.notna(), -np.inf)
     # 按行取 top_n 的掩码
     top_n_mask = pd.DataFrame(False, index=common_idx, columns=common_cols)
-    for date in common_idx:
+    rebalance_dates = list(common_idx)[::hold]
+    for date in rebalance_dates:
         row = selectable.loc[date]
         valid_cnt = (row > -np.inf).sum()
         if valid_cnt < top_n * 2:
@@ -345,12 +468,13 @@ def multi_factor_backtest(mf, factor_weights, top_n=TOP_N, hold=HOLD_DAYS,
         return None
     pr = pd.DataFrame(portfolio_returns).sort_values('date')
     rets = pr['ret'].dropna()
-    if len(rets) < 10:
+    if len(rets) < 5:
         return None
     cumulative = (1 + rets).cumprod()
     total_ret = cumulative.iloc[-1] - 1
-    n_days = len(rets)
-    annual_ret = (1 + total_ret) ** (252 / n_days) - 1 if n_days > 0 else 0
+    n_periods = len(rets)
+    periods_per_year = 252 / hold
+    annual_ret = (1 + total_ret) ** (periods_per_year / n_periods) - 1 if n_periods > 0 else 0
     sharpe = (rets.mean() / rets.std() * np.sqrt(252 / hold)) if rets.std() > 0 else 0
     peak = cumulative.cummax()
     max_dd = ((cumulative - peak) / peak).min()
@@ -358,7 +482,7 @@ def multi_factor_backtest(mf, factor_weights, top_n=TOP_N, hold=HOLD_DAYS,
     result = {
         'factor': '多因子复合(IC加权)',
         'direction': f'{len(factor_weights)}因子',
-        'n_periods': len(rets),
+        'n_periods': n_periods,
         'total_return_pct': round(total_ret * 100, 2),
         'annual_return_pct': round(annual_ret * 100, 2),
         'sharpe': round(sharpe, 3),
@@ -380,13 +504,22 @@ def main():
     args = ap.parse_args()
 
     cache = create_cache()
-    fe = FactorEngine(cache=None)
+    input_snapshot = load_factor_input_snapshot(
+        cache,
+        expected_date=get_expected_date(),
+    )
+    fe = FactorEngine(cache=cache)
     out_file = OUT_FILE_REALISTIC if args.realistic else OUT_FILE
 
     logger.info("=== 全市场策略扫描 ===")
     logger.info(f"回测模式: {'真实 (涨跌停+成本)' if args.realistic else '理想化'}")
     # 1. 计算因子
-    mf = load_factors_for_all(cache, fe, use_snapshot=not args.no_cache)
+    mf = load_factors_for_all(
+        cache,
+        fe,
+        input_snapshot,
+        use_snapshot=not args.no_cache,
+    )
 
     # 真实模式: 预构建涨跌停 map
     limit_map = None
@@ -411,8 +544,7 @@ def main():
     # 读取IC评估结果作权重
     weights = {}
     if os.path.exists(EVAL_FILE):
-        with open(EVAL_FILE, encoding='utf-8') as f:
-            eval_data = json.load(f)
+        eval_data = load_governed_evaluation(EVAL_FILE, input_snapshot)
         for item in eval_data.get('factors', []):
             fn = item['factor']
             if fn in STRONG_FACTORS:
@@ -435,6 +567,7 @@ def main():
         json.dump({'scanned_at': time.strftime('%Y-%m-%d %H:%M'),
                    'realistic': args.realistic,
                    'n_stocks': len(mf), 'top_n': TOP_N, 'hold_days': HOLD_DAYS,
+                   **input_snapshot.metadata(),
                    'strategies': results}, f, ensure_ascii=False, indent=2)
     logger.info(f"结果已保存: {out_file}")
 

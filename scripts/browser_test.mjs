@@ -8,13 +8,13 @@
  *   4. 截图保存供人工查看
  *
  * 用法: npx tsx scripts/browser_test.mjs
- * 前提: 后端(3334) + 前端(3333) 都在运行
+ * 前提: 后端(8880) + 前端(8888) 都在运行
  */
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 
-const FRONTEND = 'http://localhost:3333';
+const FRONTEND = 'http://localhost:8888';
 const SCREENSHOT_DIR = path.join(process.cwd(), 'screenshots');
 fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
@@ -59,43 +59,38 @@ async function main() {
   const bodyText = await page.evaluate(() => document.body.innerText.length);
   log(bodyText > 100, `页面有内容 (${bodyText} 字符，非白屏)`);
 
+  const enterButton = page.getByRole('button', { name: /进入工作台|进入量化终端/ });
+  if (await enterButton.count() > 0) {
+    await enterButton.click({ timeout: 5000 });
+    await page.waitForTimeout(1800);
+  }
+
   // ── 2. 各面板渲染测试 ───────────────────────
   console.log('\n■ 6 大面板渲染');
 
   const panels = [
-    { name: '数据浏览', tabText: ['数据浏览', '数据', 'Data', '市场'] },
-    { name: '因子引擎', tabText: ['因子', 'Factor'] },
-    { name: '策略运行', tabText: ['策略', 'Strategy'] },
-    { name: '交易执行', tabText: ['交易', '执行', 'Execution'] },
-    { name: '风控监控', tabText: ['风控', 'Risk'] },
-    { name: '监控告警', tabText: ['告警', '监控', 'Alert'] },
+    { name: '数据浏览', nav: '市场数据', heading: '数据浏览' },
+    { name: '因子引擎', nav: '因子研究', heading: '因子引擎' },
+    { name: '策略运行', nav: '策略运行', heading: 'F4 策略与组合验证' },
+    { name: '交易执行', nav: '模拟执行', heading: 'F5 确定性模拟执行' },
+    { name: '风控监控', nav: '风险监控', heading: '风险与审计' },
+    { name: '监控告警', nav: '告警中心', heading: '告警中心' },
   ];
 
   for (const panel of panels) {
-    let clicked = false;
-    for (const txt of panel.tabText) {
-      const el = page.locator(`text=${txt}`).first();
-      if (await el.count() > 0) {
-        try {
-          await el.click({ timeout: 3000 });
-          clicked = true;
-          break;
-        } catch {}
-      }
-    }
-    if (!clicked) {
+    const navButton = page.getByRole('complementary').getByRole('button', { name: panel.nav, exact: true });
+    if (await navButton.count() === 0) {
       log(false, `${panel.name}: 找不到切换入口`);
       continue;
     }
+    await navButton.click({ timeout: 3000 });
     await page.waitForTimeout(2500); // 等 API 返回 + 渲染
 
     // 截图
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, `${panel.name}.png`) });
 
-    // 检查面板区域是否有内容 (非加载中/空白)
-    const text = await page.evaluate(() => document.body.innerText);
-    const hasLoading = /loading|加载中|Loading/i.test(text);
-    log(!hasLoading, `${panel.name}: 面板渲染 (有数据${hasLoading ? '，但仍在加载' : ''})`);
+    const hasHeading = await page.getByText(panel.heading, { exact: true }).count() > 0;
+    log(hasHeading, `${panel.name}: ${hasHeading ? '真实页面已渲染' : `缺少标题“${panel.heading}”`}`);
   }
 
   // ── 3. 顶部行情条 ───────────────────────────
@@ -109,13 +104,15 @@ async function main() {
   // ── 4. 交互测试: 策略运行 ───────────────────
   console.log('\n■ 交互测试: 策略运行');
   // 切到策略面板
-  for (const txt of ['策略', 'Strategy']) {
-    const el = page.locator(`text=${txt}`).first();
-    if (await el.count() > 0) { try { await el.click({ timeout: 3000 }); break; } catch {} }
-  }
+  await page.getByRole('complementary').getByRole('button', { name: '策略运行', exact: true }).click({ timeout: 3000 });
   await page.waitForTimeout(1500);
-  // 找"运行策略"按钮并点击
-  const runBtn = page.locator('text=/运行策略|运行|Run/i').first();
+  // 当前策略页默认打开“市场扫描”，先进入策略运行页签再验证回测命令。
+  const runTab = page.getByRole('main').getByRole('button', { name: '诊断：策略回测', exact: true });
+  if (await runTab.count() > 0) {
+    await runTab.click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+  }
+  const runBtn = page.getByRole('button', { name: '运行策略', exact: true });
   if (await runBtn.count() > 0) {
     try {
       await runBtn.click({ timeout: 3000 });

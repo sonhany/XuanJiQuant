@@ -1,19 +1,18 @@
-"""LLM 客户端 — 多供应商大模型调用 (零依赖, 仅用 stdlib)
+﻿"""LLM client - multi-provider (stdlib, no SDK dependency).
 
-支持供应商:
-  - deepseek: DeepSeek Chat (https://api.deepseek.com/chat/completions)
-  - qwen:     通义千问 DashScope (OpenAI 兼容端点)
-  - gemini:   Google Gemini (OpenAI 兼容端点)
+Supported providers:
+  - glm: GLM OpenAI-compatible chat completions endpoint.
+  - opencode: OpenCode.ai Zen free/paid models.
 
-设计:
-  - 用 urllib.request 直接 POST, 不引入 requests/openai SDK
-  - API Key 从项目根 .env 读取 (KEY=VALUE 解析, 不依赖 python-dotenv)
-  - 全程 try/except, 失败返回 {"success": False}, 不抛异常, 不阻塞调用方
-  - chat_json() 在 chat() 基础上提取 JSON (支持 ```json 代码块和裸 JSON)
+Design:
+  - Uses urllib.request directly; no requests/openai SDK.
+  - Reads API keys from .env or environment variables.
+  - Returns {"success": False} on failures instead of raising to callers.
+  - chat_json() extracts JSON from chat() text.
 
-用法:
+Usage:
   from scripts.llm_client import chat, chat_json, get_api_key
-  r = chat("deepseek", "你是助手", "你好", timeout=15)
+  r = chat("glm", "system", "hello", timeout=15)
   if r["success"]:
       print(r["text"])
 """
@@ -24,6 +23,15 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+from scripts.llm_registry import (
+    default_model,
+    load_registry,
+    normalize_model,
+    provider_definition,
+)
 
 logger = logging.getLogger("llm_client")
 
@@ -31,41 +39,42 @@ logger = logging.getLogger("llm_client")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ── 供应商配置 ──────────────────────────────────────────────
-# 所有供应商都走 OpenAI 兼容的 /chat/completions 接口
-# GLM 为自建端点(主力), 其余为公共云备选
 PROVIDERS = {
     "glm": {
-        "endpoint": None,  # 运行时从 GLM_BASE_URL 读取, 兜底默认值
-        "default_endpoint": "http://192.168.8.49:3003/v1/chat/completions",
-        "model": None,  # 运行时从 GLM_MODEL 读取, 兜底默认值
-        "default_model": "glm-5.2",
+        "endpoint": None,
+        "default_endpoint": "https://api.ifanr.work/v1/chat/completions",
+        "model": None,
+        "default_model": default_model("glm"),
         "key_env": "GLM_API_KEY",
         "base_url_env": "GLM_BASE_URL",
         "model_env": "GLM_MODEL",
-        "label": "GLM (智谱)",
+        "label": provider_definition("glm")["client_label"],
     },
-    "deepseek": {
-        "endpoint": "https://api.deepseek.com/chat/completions",
-        "model": "deepseek-chat",
-        "key_env": "DEEPSEEK_API_KEY",
-        "label": "DeepSeek",
-    },
-    "qwen": {
-        "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-        "model": "qwen-plus",
-        "key_env": "QWEN_API_KEY",
-        "label": "通义千问",
-    },
-    "gemini": {
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "model": "gemini-2.0-flash",
-        "key_env": "GEMINI_API_KEY",
-        "label": "Gemini",
+    "opencode": {
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions",
+        "default_endpoint": "https://opencode.ai/zen/v1/chat/completions",
+        "model": None,
+        "default_model": default_model("opencode"),
+        "key_env": "OPENCODE_API_KEY",
+        "base_url_env": None,
+        "model_env": "OPENCODE_MODEL",
+        "label": provider_definition("opencode")["client_label"],
     },
 }
 
 # 默认供应商 (主力模型)
 DEFAULT_PROVIDER = "glm"
+
+_MODEL_REGISTRY = load_registry()
+SUPPORTED_MODELS = {
+    provider: {item["id"] for item in definition["models"]}
+    for provider, definition in _MODEL_REGISTRY["providers"].items()
+}
+MODEL_MIGRATIONS = {
+    provider: dict(definition.get("aliases") or {})
+    for provider, definition in _MODEL_REGISTRY["providers"].items()
+}
+_MODEL_OVERRIDES = ContextVar("llm_model_overrides", default={})
 
 # ── .env 加载 (模块级缓存, 首次调用时读取) ─────────────────
 _env_loaded = False
@@ -112,20 +121,41 @@ def _resolve_endpoint(cfg: dict) -> str:
     """解析供应商 endpoint。GLM 支持从环境变量读取自建端点。"""
     base_url_env = cfg.get("base_url_env")
     if base_url_env:
-        base = os.environ.get(base_url_env, "").rstrip("/")
+        base = os.environ.get(base_url_env, "").strip().rstrip("/")
         if base:
-            return f"{base}/chat/completions"
+            if base.endswith("/chat/completions"):
+                return base
+            if base.endswith("/v1"):
+                return f"{base}/chat/completions"
+            return f"{base}/v1/chat/completions"
     return cfg.get("endpoint") or cfg.get("default_endpoint", "")
 
 
-def _resolve_model(cfg: dict) -> str:
+def _resolve_model(cfg: dict, model_override: str = None, provider: str = "") -> str:
     """解析供应商 model。GLM 支持从环境变量读取模型名。"""
-    model_env = cfg.get("model_env")
-    if model_env:
-        m = os.environ.get(model_env, "")
-        if m:
-            return m
-    return cfg.get("model") or cfg.get("default_model", "")
+    if model_override:
+        selected = model_override
+    else:
+        selected = ""
+        model_env = cfg.get("model_env")
+        if model_env:
+            selected = os.environ.get(model_env, "")
+        selected = selected or cfg.get("model") or cfg.get("default_model", "")
+    return normalize_model(provider, selected)
+
+
+@contextmanager
+def model_override(provider: str, model: str = ""):
+    """Apply one configured model to all nested LLM calls in this context."""
+    normalized_provider = str(provider or "").strip().lower()
+    current = dict(_MODEL_OVERRIDES.get() or {})
+    if normalized_provider and model:
+        current[normalized_provider] = str(model).strip()
+    token = _MODEL_OVERRIDES.set(current)
+    try:
+        yield
+    finally:
+        _MODEL_OVERRIDES.reset(token)
 
 
 def get_provider_label(provider: str) -> str:
@@ -156,6 +186,7 @@ def _single_call(endpoint: str, api_key: str, payload: dict, timeout: int) -> di
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "User-Agent": "OpenCode/1.0",
         },
         method="POST",
     )
@@ -166,7 +197,7 @@ def _single_call(endpoint: str, api_key: str, payload: dict, timeout: int) -> di
 
 def chat(provider: str, system: str, user: str,
          temperature: float = 0.3, timeout: int = 25,
-         max_tokens: int = 800, scene: str = "") -> dict:
+         max_tokens: int = 800, scene: str = "", max_retries: int = None, model: str = None) -> dict:
     """调用 LLM 聊天接口, 返回纯文本。
 
     Args:
@@ -191,10 +222,20 @@ def chat(provider: str, system: str, user: str,
         return {"success": False, "error": f"未配置 {cfg['key_env']}", "text": ""}
 
     endpoint = _resolve_endpoint(cfg)
-    model = _resolve_model(cfg)
+    configured_model = model or (_MODEL_OVERRIDES.get() or {}).get(provider, "")
+    if not configured_model:
+        try:
+            from scripts.llm_registry import resolve_llm_selection
+
+            effective = resolve_llm_selection(scene=scene or "default")
+            if effective.get("provider") == provider:
+                configured_model = str(effective.get("model") or "")
+        except Exception:
+            configured_model = ""
+    resolved_model = _resolve_model(cfg, model_override=configured_model, provider=provider)
 
     payload = {
-        "model": model,
+        "model": resolved_model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -205,7 +246,8 @@ def chat(provider: str, system: str, user: str,
     }
 
     last_err = None
-    for attempt in range(_MAX_RETRIES + 1):  # 1次初始 + 2次重试
+    retries = _MAX_RETRIES if max_retries is None else max(0, int(max_retries))
+    for attempt in range(retries + 1):  # 1次初始 + N次重试
         try:
             result = _single_call(endpoint, api_key, payload, timeout)
             msg = result.get("choices", [{}])[0].get("message", {})
@@ -214,13 +256,20 @@ def chat(provider: str, system: str, user: str,
             text = msg.get("content") or msg.get("reasoning_content") or ""
             # 剥离推理模型可能内嵌的推理过程
             text = strip_reasoning(text)
-            usage = result.get("usage") or {}
-            _record_usage_safe(provider, scene, usage, True, model)
-            return {"success": True, "text": text.strip(), "usage": usage}
+            usage = result.get("choices", [{}])[0].get("usage") or result.get("usage") or {}
+            _record_usage_safe(provider, scene, usage, True, resolved_model)
+            return {
+                "success": True,
+                "text": text.strip(),
+                "usage": usage,
+                "provider": provider,
+                "model": resolved_model,
+                "requested_model": configured_model or resolved_model,
+            }
         except Exception as e:
             last_err = e
-            if attempt < _MAX_RETRIES and _is_retryable(e):
-                wait = _RETRY_BACKOFF[attempt]
+            if attempt < retries and _is_retryable(e):
+                wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
                 logger.debug(f"chat({provider}) attempt {attempt+1} failed ({e}), retry in {wait}s")
                 time.sleep(wait)
                 continue
@@ -229,8 +278,15 @@ def chat(provider: str, system: str, user: str,
 
     err = str(last_err)[:200]
     logger.debug(f"chat({provider}) failed after {attempt+1} attempts: {err}")
-    _record_usage_safe(provider, scene, None, False, model)
-    return {"success": False, "error": err, "text": ""}
+    _record_usage_safe(provider, scene, None, False, resolved_model)
+    return {
+        "success": False,
+        "error": err,
+        "text": "",
+        "provider": provider,
+        "model": resolved_model,
+        "requested_model": configured_model or resolved_model,
+    }
 
 
 def _record_usage_safe(provider: str, scene: str, usage, success: bool, model: str = "") -> None:
@@ -357,18 +413,41 @@ def _extract_json(text: str):
         parsed = _try_parse_json_lenient(candidate)
         if parsed is not None:
             return parsed
-    # 2. 尝试裸 JSON: 找最后一个 { 到最后一个 }
-    #    (推理模型可能在 JSON 前输出推理文字)
-    first = text.rfind("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        candidate = text[first:last + 1]
-        parsed = _try_parse_json_lenient(candidate)
+    # 2. 提取所有括号平衡的裸 JSON 对象。不能使用 rfind("{")，否则
+    #    嵌套对象会被误截成最内层对象，顶层业务字段随之丢失。
+    candidates = []
+    depth = 0
+    start = None
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and in_string:
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(text[start:index + 1])
+                start = None
+    for candidate in reversed(candidates):
+        parsed = _try_parse_json_lenient(candidate.strip())
         if parsed is not None:
             return parsed
-    # 3. 如果找到了 { 但没找到 }, 说明 JSON 被截断, 尝试修复
-    if first != -1 and last <= first:
-        candidate = _repair_truncated_json(text[first:])
+    # 3. 有未闭合的最外层对象时，尝试修复截断输出。
+    if depth > 0 and start is not None:
+        candidate = _repair_truncated_json(text[start:])
         if candidate:
             parsed = _try_parse_json_lenient(candidate)
             if parsed is not None:
@@ -464,13 +543,27 @@ def chat_json(provider: str, system: str, user: str, **kwargs) -> dict:
 
     r = chat(provider, full_system, user, **kwargs)
     if not r["success"]:
-        return {"success": False, "error": r.get("error", ""), "data": {}}
+        return {
+            "success": False,
+            "error": r.get("error", ""),
+            "data": {},
+            "provider": r.get("provider"),
+            "model": r.get("model"),
+            "requested_model": r.get("requested_model"),
+        }
 
     data = _extract_json(r["text"])
     if data is None:
         return {"success": False, "error": "LLM 响应无法解析为 JSON", "data": {},
                 "raw": r["text"][:300]}
-    return {"success": True, "data": data, "usage": r.get("usage", {})}
+    return {
+        "success": True,
+        "data": data,
+        "usage": r.get("usage", {}),
+        "provider": r.get("provider"),
+        "model": r.get("model"),
+        "requested_model": r.get("requested_model"),
+    }
 
 
 # ── CLI 测试入口 ────────────────────────────────────────────

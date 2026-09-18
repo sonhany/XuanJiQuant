@@ -1,14 +1,14 @@
 @echo off
 chcp 65001 >nul
 REM ============================================================
-REM   AlphaCouncil2-AI 首次安装脚本
+REM   XuanJiQuant 首次安装脚本
 REM   用途: 检查环境 + 安装依赖 + 初始化数据
 REM ============================================================
 cd /d "%~dp0"
-title AlphaCouncil2-AI 首次安装
+title XuanJiQuant 首次安装
 
 echo ============================================================
-echo   AlphaCouncil2-AI 首次安装
+echo   XuanJiQuant 首次安装
 echo ============================================================
 echo.
 
@@ -77,7 +77,7 @@ echo ============================================================
 echo   安装完成!
 echo.
 echo   下一步: 双击 start_all.bat 启动系统
-echo   前端: http://localhost:3333
-echo   后端: http://localhost:3334
+echo   前端: http://localhost:8888
+echo   后端: http://localhost:8880
 echo ============================================================
 pause

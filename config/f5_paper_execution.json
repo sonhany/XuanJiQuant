@@ -1,0 +1,23 @@
+{
+  "version": "f5-paper-policy-v2-staged-rebalance",
+  "enabled": true,
+  "kill_switch": false,
+  "initial_capital": 1000000.0,
+  "commission_rate": 0.0003,
+  "minimum_commission": 5.0,
+  "stamp_tax_rate": 0.0005,
+  "transfer_fee_rate": 0.00001,
+  "slippage_rate": 0.0001,
+  "participation_cap": 0.1,
+  "lot_size": 100,
+  "execution_mode": "paper_daily",
+  "paper_execution_authority": true,
+  "live_execution_authority": false,
+  "experimental_paper": {
+    "enabled": true,
+    "policy_version": "f5-experimental-paper-v1",
+    "allowed_f4_statuses": ["f4_rejected"],
+    "require_zero_constraint_violations": true,
+    "require_zero_future_data_violations": true
+  }
+}

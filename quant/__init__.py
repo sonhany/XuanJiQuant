@@ -1,1 +1,1 @@
-"""quant - AlphaCouncil 量化交易引擎"""
+"""quant - XuanJi 量化交易引擎"""

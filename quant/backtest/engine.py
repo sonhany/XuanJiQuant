@@ -16,7 +16,7 @@
 import logging
 import uuid
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 from enum import Enum
 
@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from quant.data.cache import create_cache
+from quant.paper_execution.slippage import ISlippageModel, FixedRateSlippage
 
 logger = logging.getLogger("quant.backtest")
 
@@ -80,6 +81,8 @@ class Fill:
     price: float
     commission: float
     slippage: float
+    stamp_tax: float = 0.0
+    transfer_fee: float = 0.0
 
 
 @dataclass
@@ -133,7 +136,7 @@ class PerformanceTracker:
 
         # Annualized return
         n_days = len(snaps)
-        total_return = (equity_series.iloc[-1] / equity_series.iloc[0]) - 1 if equity_series.iloc[0] > 0 else 0
+        total_return = (equity_series.iloc[-1] / self.initial_equity) - 1 if self.initial_equity > 0 else 0
         annual_return = (1 + total_return) ** (252 / n_days) - 1 if n_days > 0 else 0
 
         # Sharpe ratio (annualized)
@@ -228,19 +231,29 @@ class BacktestSimulator:
         self,
         initial_cash: float = 1_000_000.0,
         commission_rate: float = 0.0003,   # 手续费 0.03%
+        min_commission: float = 0.0,
+        stamp_tax_rate: float = 0.0,
+        transfer_fee_rate: float = 0.0,
         slippage_rate: float = 0.0001,       # 滑点 0.01%
+        slippage_model: ISlippageModel | None = None,  # 可插拔滑点模型
         position_size_pct: float = 0.95,     # 最大仓位占比
         allow_short: bool = False,
         enforce_limit: bool = True,          # 涨跌停拒绝成交
         max_volume_pct: float = 0.10,        # 单笔≤当日成交量的10%
+        enforce_t1: bool = True,
     ):
         self.initial_cash = initial_cash
         self.commission_rate = commission_rate
+        self.min_commission = min_commission
+        self.stamp_tax_rate = stamp_tax_rate
+        self.transfer_fee_rate = transfer_fee_rate
         self.slippage_rate = slippage_rate
+        self._slippage_model = slippage_model or FixedRateSlippage(rate=slippage_rate)
         self.position_size_pct = position_size_pct
         self.allow_short = allow_short
         self.enforce_limit = enforce_limit
         self.max_volume_pct = max_volume_pct
+        self.enforce_t1 = enforce_t1
 
         # State
         self._cash = initial_cash
@@ -261,9 +274,16 @@ class BacktestSimulator:
 
         # Event history for debugging
         self._event_log: list[dict] = []
+        self._buy_dates: dict[str, str] = {}
 
         # 统计: 被涨跌停/流动性拒绝的订单数
-        self._stats = {"limit_rejected": 0, "volume_cut": 0, "volume_cancelled": 0}
+        self._stats = {
+            "limit_rejected": 0,
+            "volume_cut": 0,
+            "volume_cancelled": 0,
+            "t1_rejected": 0,
+            "suspended_rejected": 0,
+        }
 
         # Max position per stock (fraction of equity)
         self._max_position_pct = 0.2  # 单股最大 20%
@@ -291,7 +311,7 @@ class BacktestSimulator:
             if df is None or df.empty:
                 continue
             df = df.copy()
-            for col in ('close', 'high', 'low', 'amount'):
+            for col in ('open', 'close', 'high', 'low', 'amount'):
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
             df['date'] = df['date'].astype(str)
@@ -310,10 +330,13 @@ class BacktestSimulator:
             for _, row in df_sorted.iterrows():
                 pc = row['prev_close']
                 bar_map[row['date']] = {
+                    'open': float(row.get('open', row.get('close', 0))),
                     'high': float(row.get('high', 0)),
                     'low': float(row.get('low', 0)),
                     'prev_close': float(pc) if pd.notna(pc) else 0,
                     'shares': int(row['shares']),
+                    'paused': int(row.get('paused', 0) or 0),
+                    'tradable': int(row.get('tradable', 1) or 0),
                 }
             self._bar_map[code] = bar_map
         self._klines = klines_dict
@@ -340,6 +363,14 @@ class BacktestSimulator:
         self._fills = []
         self._tracker = PerformanceTracker(self.initial_cash)
         self._event_log = []
+        self._buy_dates = {}
+        self._stats = {
+            "limit_rejected": 0,
+            "volume_cut": 0,
+            "volume_cancelled": 0,
+            "t1_rejected": 0,
+            "suspended_rejected": 0,
+        }
 
         prev_equity = self.initial_cash
 
@@ -355,14 +386,14 @@ class BacktestSimulator:
                     elif code in self._current_prices:
                         del self._current_prices[code]
 
-            # 2. 更新持仓浮动盈亏
+            # 2. 执行此前交易日收盘后生成的订单，按当前交易日开盘价成交。
+            self._execute_pending_orders(date)
+
+            # 3. 以当日收盘价更新持仓估值。
             self._update_positions()
 
-            # 3. 处理当日信号 → 生成订单
+            # 4. 当日收盘后生成信号，最早在下一交易日成交。
             self._process_signals(date)
-
-            # 4. 处理订单 (市价单当日成交)
-            self._execute_pending_orders(date)
 
             # 5. 更新组合快照
             equity = self._compute_equity()
@@ -389,10 +420,25 @@ class BacktestSimulator:
         metrics["fill_count"] = len(self._fills)
         metrics["annual_return_pct"] = metrics.get("annual_return_pct", 0)
         metrics["commission_paid"] = round(sum(f.commission for f in self._fills), 2)
+        metrics["stamp_tax_paid"] = round(sum(f.stamp_tax for f in self._fills), 2)
+        metrics["transfer_fee_paid"] = round(sum(f.transfer_fee for f in self._fills), 2)
+        metrics["total_fee_paid"] = round(sum(f.commission + f.stamp_tax + f.transfer_fee for f in self._fills), 2)
         # 真实性约束统计
         metrics["limit_rejected"] = self._stats["limit_rejected"]
         metrics["volume_cut"] = self._stats["volume_cut"]
         metrics["volume_cancelled"] = self._stats["volume_cancelled"]
+        metrics["t1_rejected"] = self._stats["t1_rejected"]
+        metrics["suspended_rejected"] = self._stats["suspended_rejected"]
+        metrics["rules"] = {
+            "commission_rate": self.commission_rate,
+            "min_commission": self.min_commission,
+            "stamp_tax_rate": self.stamp_tax_rate,
+            "transfer_fee_rate": self.transfer_fee_rate,
+            "slippage_rate": self.slippage_rate,
+            "enforce_limit": self.enforce_limit,
+            "enforce_t1": self.enforce_t1,
+            "max_volume_pct": self.max_volume_pct,
+        }
 
         # 基准对比: 用第一只股票的K线作为简易基准代理（不引入新数据源）
         benchmark_metrics = self._compute_benchmark_metrics()
@@ -421,6 +467,8 @@ class BacktestSimulator:
                     "quantity": f.quantity,
                     "price": round(f.price, 2),
                     "commission": round(f.commission, 2),
+                    "stamp_tax": round(f.stamp_tax, 2),
+                    "transfer_fee": round(f.transfer_fee, 2),
                     "slippage": round(f.slippage, 2),
                 }
                 for f in self._fills
@@ -437,6 +485,7 @@ class BacktestSimulator:
                 }
                 for o in self._orders.values()
             ],
+            "event_log": list(self._event_log),
         }
 
     def _process_signals(self, date: str):
@@ -463,12 +512,15 @@ class BacktestSimulator:
                     self._create_market_order(code, date, "buy", target_qty - current_qty)
                 elif target_qty < current_qty:
                     self._create_market_order(code, date, "sell", current_qty - target_qty)
-            elif sig.signal < 0 and self.allow_short:  # Short signal
-                target_qty = int(max_pos_value / current_price / 100) * 100
-                if target_qty > abs(current_qty):
-                    self._create_market_order(code, date, "sell_short", target_qty - abs(current_qty))
-                elif target_qty < abs(current_qty):
-                    self._create_market_order(code, date, "buy_cover", abs(current_qty) - target_qty)
+            elif sig.signal < 0:
+                if current_qty > 0:
+                    self._create_market_order(code, date, "sell", current_qty)
+                elif self.allow_short:
+                    target_qty = int(max_pos_value / current_price / 100) * 100
+                    if target_qty > abs(current_qty):
+                        self._create_market_order(code, date, "sell_short", target_qty - abs(current_qty))
+                    elif target_qty < abs(current_qty):
+                        self._create_market_order(code, date, "buy_cover", abs(current_qty) - target_qty)
             elif sig.signal == 0 and current_qty > 0:
                 # Flatten
                 self._create_market_order(code, date, "sell", current_qty)
@@ -525,19 +577,33 @@ class BacktestSimulator:
         return False
 
     def _execute_pending_orders(self, date: str):
-        """执行所有待成交订单 (市价单，当日以收盘价成交)
+        """执行所有待成交订单 (市价单，下一交易日以开盘价成交)
 
         真实性约束:
         - 涨跌停封板: 拒绝成交 (买不进涨停/卖不出跌停)
         - 成交量限制: 单笔≤当日成交量*max_volume_pct, 超过则部分成交
         """
         for oid, order in list(self._orders.items()):
-            if order.date != date or order.status != "pending":
+            if order.date >= date or order.status != "pending":
                 continue
 
-            price = self._current_prices.get(order.code, 0)
-            if price <= 0:
+            bar = self._bar_map.get(order.code, {}).get(date, {})
+            if int(bar.get("paused", 0) or 0) or not int(
+                bar.get("tradable", 1) or 0
+            ):
                 order.status = "rejected"
+                self._stats["suspended_rejected"] += 1
+                self._event_log.append(
+                    {
+                        "type": "suspended_rejected",
+                        "date": date,
+                        "code": order.code,
+                        "dir": order.direction,
+                    }
+                )
+                continue
+            price = float(bar.get("open") or 0)
+            if price <= 0:
                 continue
 
             # 1. 涨跌停检测
@@ -549,10 +615,8 @@ class BacktestSimulator:
 
             # 2. 成交量限制 (部分成交)
             quantity = order.quantity
+            daily_shares = int(bar.get('shares', 0) or 0)
             if self.max_volume_pct < 1.0 and order.direction in ("buy", "buy_cover"):
-                bars = self._bar_map.get(order.code, {})
-                bar = bars.get(date, {})
-                daily_shares = bar.get('shares', 0)
                 if daily_shares > 0:
                     max_fillable = int(daily_shares * self.max_volume_pct / 100) * 100
                     if max_fillable < quantity:
@@ -563,18 +627,27 @@ class BacktestSimulator:
                         quantity = max_fillable
                         self._stats["volume_cut"] += 1
 
-            # 3. 滑点
-            slippage = price * self.slippage_rate
-            if order.direction in ("buy", "buy_cover"):
-                fill_price = price + slippage
-            else:
-                fill_price = price - slippage
+            # 3. 滑点 (可插拔模型)
+            fill_price, slippage = self._slippage_model.compute(
+                price=price, direction=order.direction,
+                quantity=quantity, adv=int(daily_shares),
+            )
+
+            if self.enforce_t1 and order.direction in ("sell", "sell_short"):
+                if self._buy_dates.get(order.code) == date:
+                    order.status = "rejected"
+                    self._stats["t1_rejected"] += 1
+                    self._event_log.append({"type": "t1_rejected", "date": date, "code": order.code, "dir": order.direction})
+                    continue
 
             # 4. 手续费 + 现金检查 (用调整后的 quantity)
             notional = fill_price * quantity
-            commission = notional * self.commission_rate
+            commission = max(notional * self.commission_rate, self.min_commission) if notional > 0 else 0.0
+            stamp_tax = notional * self.stamp_tax_rate if order.direction in ("sell", "sell_short") else 0.0
+            transfer_fee = notional * self.transfer_fee_rate if notional > 0 else 0.0
+            total_fee = commission + stamp_tax + transfer_fee
 
-            if order.direction in ("buy",) and self._cash < (notional + commission):
+            if order.direction in ("buy",) and self._cash < (notional + total_fee):
                 order.status = "rejected"
                 continue
 
@@ -588,6 +661,8 @@ class BacktestSimulator:
                 quantity=quantity,
                 price=round(fill_price, 2),
                 commission=round(commission, 2),
+                stamp_tax=round(stamp_tax, 2),
+                transfer_fee=round(transfer_fee, 2),
                 slippage=round(slippage, 4),
             )
             self._fills.append(fill)
@@ -596,44 +671,51 @@ class BacktestSimulator:
 
             # Update position
             self._apply_fill(fill)
-            self._event_log.append({"type": "fill", "date": date, "fill": fill})
+            self._event_log.append(
+                {"type": "fill", "date": date, "fill": asdict(fill)}
+            )
 
     def _apply_fill(self, fill: Fill):
         """更新仓位和现金"""
         code = fill.code
         if fill.direction == "buy":
             pos = self._positions.get(code, Position(code=code))
-            total_cost = fill.price * fill.quantity + fill.commission
+            total_fee = fill.commission + fill.stamp_tax + fill.transfer_fee
+            total_cost = fill.price * fill.quantity + total_fee
             new_qty = pos.quantity + fill.quantity
             new_avg = (pos.avg_entry_price * pos.quantity + fill.price * fill.quantity) / new_qty
             pos.quantity = new_qty
             pos.avg_entry_price = round(new_avg, 4)
             self._cash -= total_cost
             self._positions[code] = pos
+            self._buy_dates[code] = fill.date
         elif fill.direction == "sell":
             pos = self._positions.get(code)
             if pos and pos.quantity >= fill.quantity:
-                realized = (fill.price - pos.avg_entry_price) * fill.quantity - fill.commission
+                total_fee = fill.commission + fill.stamp_tax + fill.transfer_fee
+                realized = (fill.price - pos.avg_entry_price) * fill.quantity - total_fee
                 pos.realized_pnl += realized
                 pos.quantity -= fill.quantity
-                self._cash += fill.price * fill.quantity - fill.commission
+                self._cash += fill.price * fill.quantity - total_fee
                 if pos.quantity == 0:
                     del self._positions[code]
                 else:
                     self._positions[code] = pos
         elif fill.direction == "sell_short" and self.allow_short:
+            total_fee = fill.commission + fill.stamp_tax + fill.transfer_fee
             pos = self._positions.get(code, Position(code=code))
             pos.quantity -= fill.quantity
             pos.avg_entry_price = fill.price
-            self._cash += fill.price * fill.quantity - fill.commission
+            self._cash += fill.price * fill.quantity - total_fee
             self._positions[code] = pos
         elif fill.direction == "buy_cover" and self.allow_short:
             pos = self._positions.get(code)
             if pos:
-                realized = (pos.avg_entry_price - fill.price) * fill.quantity - fill.commission
+                total_fee = fill.commission + fill.stamp_tax + fill.transfer_fee
+                realized = (pos.avg_entry_price - fill.price) * fill.quantity - total_fee
                 pos.realized_pnl += realized
                 pos.quantity += fill.quantity  # quantity is negative
-                self._cash -= fill.price * fill.quantity + fill.commission
+                self._cash -= fill.price * fill.quantity + total_fee
                 if abs(pos.quantity) == 0:
                     del self._positions[code]
                 else:
@@ -675,6 +757,7 @@ class BacktestSimulator:
             "daily_snapshots": [],
             "fills": [],
             "orders": [],
+            "event_log": [],
         }
 
     def _compute_benchmark_metrics(self) -> dict:

@@ -55,7 +55,9 @@ def compute_price_volume(df: pd.DataFrame) -> pd.DataFrame:
         df[f'pvcorr_{p}'] = rolling_corr
     # pvbeta_20: 20 日 close 对 volume 的回归斜率 (用协方差/方差近似)
     ret_1 = close.pct_change()
-    vol_1 = volume.replace(0, np.nan).pct_change()
+    # Preserve pandas' historical pad semantics explicitly so future pandas
+    # upgrades do not change the factor or emit one warning per instrument.
+    vol_1 = volume.replace(0, np.nan).ffill().pct_change(fill_method=None)
     cov_20 = ret_1.rolling(20, min_periods=5).cov(vol_1)
     var_20 = vol_1.rolling(20, min_periods=5).var()
     df['pvbeta_20'] = cov_20 / var_20.replace(0, np.nan)
