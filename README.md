@@ -40,6 +40,17 @@ node scripts/start_services.mjs     # 幂等启动 Web + API
 - 全量回归：`python -m pytest -q`、`npm run test:contracts`、`npx tsc --noEmit`、`npm run build`
 - 计划任务（安装前必须先完成全量回归）：日频 `scripts/install_f5_paper_task.ps1`、盘中 `scripts/install_f5_intraday_task.ps1`
 
+### 下载安装包
+
+从 Releases 获取便携包：<https://github.com/sonhany/xuanji/releases/latest>
+
+1. 下载 `XuanJiQuant-vX.Y.Z-portable.zip` 并解压
+2. 双击 `setup.bat`（检查 Node/Python 并安装依赖）
+3. 双击 `start_all.bat`，或执行 `node scripts/start_services.mjs`
+
+> 便携包为源码包，不含 `node_modules` 与本地数据（`data/`、`logs/`），首次启动需联网安装依赖。
+> 每个 Release 由推送 `v*.*.*` 标签自动触发打包（`.github/workflows/release.yml`）。
+
 ## 架构
 
 ```text
