@@ -22,7 +22,8 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: anthropic/claude-sonnet-4-20250514
+          # OPENCODE_API_KEY 属 OpenCode Zen，必须用 opencode/ 前缀
+          model: opencode/claude-sonnet-4-5
           prompt: |
             审查这个 Pull Request：
 

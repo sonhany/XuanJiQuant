@@ -28,8 +28,10 @@ jobs:
           # 密钥在 Settings -> Secrets and variables -> Actions 中添加
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          # 格式为 provider/model；用 opencode.ai 的 key 也可填 opencode/ 开头的官方模型
-          model: anthropic/claude-sonnet-4-20250514
+          # 格式 provider/model。OPENCODE_API_KEY 属 OpenCode Zen，必须用 opencode/ 前缀
+          # 可选：opencode/claude-sonnet-4-5、opencode/claude-opus-4-5、opencode/gpt-5.2、
+          #       opencode/kimi-k3、opencode/glm-5.3、opencode/minimax-m3
+          model: opencode/claude-sonnet-4-5
           # share: true    # 公开仓库默认 true，不希望会话被公开分享则设为 false
           # agent: build   # 可选，默认 build
           # prompt: |      # 可选，覆盖默认行为
