@@ -66,6 +66,35 @@ node scripts/start_services.mjs     # 幂等启动 Web + API
 研究与执行严格分离：研究产物固定 `promotion_state=research_only`、`execution_authority=false`；
 F5 只消费已发布的研究结论，不回写研究产物，不外溢为实盘。
 
+## 确定性研究调度
+
+所有研究任务由 `ResearchTrainingScheduler` 统一调度，经 `ResearchJobStore` 持久化幂等键与状态。计划任务只认领未完成的 job，不并发触发重叠执行。
+
+| 任务 | 时间 | 入口 | 说明 |
+|---|---|---|---|
+| `XuanJiQuant-Research-Daily` | 交易日 16:20 | `run_daily_research_pipeline.py` | 全市场日线更新 → DataSnapshot → 同版本因子 → `research_selection_daily` → 版本化研究组合 |
+| `XuanJiQuant-Qlib-Weekly` | 周六 18:30 | `qlib_schedule.py` | 六年 PIT 采集、质量、Alpha158、LightGBM 训练、双引擎回测 |
+| `XuanJiQuant-Strategy-Weekly` | 周日 10:00 | `validate_strategy_portfolios.py` | F4 多 Alpha 候选工厂 v2、走样本外验证、组合发布 |
+| `XuanJiQuant-Paper-Daily` | 周一至周五 17:10 | `f5_paper_runner.py` | 日频 F5 确定性模拟执行、十项对账 |
+| `XuanJiQuant-Paper-Intraday` | 工作日 09:35-14:50 每 5 分钟 | `f5_paper_runner.py` | 盘中自动模拟、行情刷新、差额下单、对账 |
+
+研究产物固定 `promotion_state=research_only`、`execution_authority=false`；调度器禁止把研究结果写成 `paper_active`、`production_candidate`、`approved` 或 `live`。研究结果不构成交易信号，`research_selection` 仅反映 F4/PIT 数据截止日与当前因子/选股日的版本化研究组合，不是目标组合或实盘指令。所有门禁失败一律失败关闭。
+
+## 市场浏览 Top100 与资金流补充链路
+
+市场浏览面板（`components/DbPanel.tsx`）通过 Node API（`server/routes/data.mjs`）请求 Python 后端（`scripts/data_runner.py::action_stocks`）获取全市场 Top100 数据。数据流经以下路径：
+
+```
+DbPanel.tsx → POST /api/data {action:"stocks", limit:100, sort_by:"amount"}
+  → server/routes/data.mjs → scripts/data_runner.py::action_stocks
+    → scripts/data_runner.py::fetch_stock_market_metrics
+      → 东方财富（主力净流入 main_net_inflow、换手率 turnover_rate、主力净占比 main_net_inflow_pct）
+      → 腾讯（换手率降级）
+  → 返回 TOP100 + 资金流字段
+```
+
+东方财富不接管行情主源（行情主源为 TdxQuant/新浪/腾讯），只补资金流与换手率字段。腾讯只补换手率。市场浏览使用 `refresh_if_stale: true` 允许过期缓存刷新，不强制每次轮询绕过实时 Top 缓存。
+
 ## 目录结构（仓库保留内容）
 
 | 路径 | 职责 |
