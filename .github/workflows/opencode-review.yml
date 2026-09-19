@@ -23,10 +23,10 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           # OPENCODE_API_KEY 属 OpenCode Zen，必须用 opencode/ 前缀
-          # 免费模型，可选：opencode/big-pickle、opencode/mimo-v2.5-free、
-          # opencode/ling-3.0-flash-fin-free、opencode/nemotron-3-ultra-free、
-          # opencode/nemotron-3.5-lightning-free、opencode/muse-spark-1.3-contributor-free
-          model: opencode/big-pickle
+          # 本账号实际启用的免费模型：opencode/nemotron-3-ultra-free、
+          # opencode/nemotron-3.5-lightning-free、opencode/mimo-v2.5-free、
+          # opencode/ling-3.0-flash-fin-free、opencode/muse-spark-1.3-contributor-free
+          model: opencode/nemotron-3-ultra-free
           prompt: |
             审查这个 Pull Request：
 
