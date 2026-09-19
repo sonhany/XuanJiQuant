@@ -8,9 +8,14 @@ on:
 
 jobs:
   opencode:
+    # 排除 bot 自身发布的评论再次触发（否则 opencode-agent[bot] 的回复会造成
+    # 循环触发，并在 Issue 里留下 "does not have write permissions" 噪声评论）
     if: |
-      contains(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, '/opencode')
+      !endsWith(github.event.comment.user.login, '[bot]') &&
+      (
+        contains(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, '/opencode')
+      )
     runs-on: ubuntu-latest
     permissions:
       id-token: write
